@@ -1,0 +1,10 @@
+{
+  "name": "PaperScope AI 研究雷达",
+  "short_name": "PaperScope",
+  "description": "聚合最新 AI 论文、官方研究资讯与会议期刊信息",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f9f7",
+  "theme_color": "#126447",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
