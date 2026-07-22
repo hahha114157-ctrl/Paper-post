@@ -1,7 +1,7 @@
 {
-  "name": "PaperScope 分页研究工作台",
+  "name": "PaperScope 质量优先研究工作台",
   "short_name": "PaperScope",
-  "description": "分页浏览 AI 与体系结构论文，管理阅读队列、笔记、专题和发表动态",
+  "description": "按顶会期刊质量优先浏览 AI 与体系结构论文，执行每日一篇阅读计划",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
