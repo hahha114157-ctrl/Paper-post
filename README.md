@@ -1,15 +1,24 @@
 # PaperScope
 
-PaperScope 是一个面向 AI 研究人员的论文、官方资讯和会议期刊聚合站。生产环境使用 **GitHub Actions 定时抓取数据 + GitHub Pages 静态发布**，不需要 Render 或常驻服务器。
+PaperScope 是一个面向 AI 与计算机体系结构研究人员的论文工作台。生产环境使用 **GitHub Actions 定时抓取数据 + GitHub Pages 静态发布**，不需要 Render 或常驻服务器。
 
 固定网址：<https://hahha114157-ctrl.github.io/Paper-post/>
 
 完整操作见 [GitHub Pages 部署与 APP 安装指南](DEPLOYMENT_GUIDE.md)。
 
+## 个人文献库
+
+- 个人主页与研究方向资料。
+- 收藏、已读历史、笔记、自定义标签与摘要文字标注。
+- 基于 arXiv 元数据及 Crossref 标题匹配的正式发表状态跟踪。
+- JSON 导入/导出备份。
+
+个人数据只保存在当前浏览器的 `localStorage`，不会上传到 GitHub。清理浏览器数据或更换设备前请先导出备份。
+
 ## 数据来源
 
-- arXiv API：`cs.AI`、`cs.LG`、`cs.CL`、`cs.CV`、`cs.RO` 最新预印本。
-- Crossref REST API：最近 45 天登记 DOI 的 AI / ML 期刊论文。
+- arXiv API：AI 栏目使用 `cs.AI`、`cs.LG`、`cs.CL`、`cs.CV`、`cs.RO`；体系结构栏目使用 `cs.AR`、`cs.DC`、`cs.PF`。
+- Crossref REST API：AI 与计算机体系结构相关的最新期刊及会议论文。
 - 官方 RSS：OpenAI、Google DeepMind、Microsoft Research。
 - 会议与期刊：官方 CFP / 作者指南链接、人工核验日期和动态截止状态。
 
