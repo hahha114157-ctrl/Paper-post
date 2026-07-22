@@ -1,130 +1,117 @@
-# PaperScope 部署与 APP 安装指南
+# GitHub Pages 部署与 APP 安装指南
 
-本文介绍如何将 PaperScope 部署为长期可访问的 HTTPS 网站，以及如何将网站安装成桌面或手机 APP。
+PaperScope 已改造为 GitHub Pages 静态站点，不需要购买服务器或使用 Render。GitHub Actions 每天抓取最新内容，并将构建结果发布到固定 HTTPS 地址。
 
-## 一、部署前准备
+## 一、启用 GitHub Pages
 
-PaperScope 是一个 Node.js 服务，托管环境需要满足：
+代码合并到 `main` 后：
 
-- Node.js 18 或更新版本。
-- 允许服务端访问 arXiv、Crossref、OpenAI、Google DeepMind 和 Microsoft Research。
-- 启动命令为 `npm start`。
-- 服务端口从环境变量 `PORT` 读取；未设置时使用 `4173`。
-- 健康检查地址为 `/api/health`。
+1. 打开仓库 <https://github.com/hahha114157-ctrl/Paper-post>。
+2. 进入 **Settings** → **Pages**。
+3. 在 **Build and deployment** 的 **Source** 中选择 **GitHub Actions**。
+4. 打开仓库的 **Actions** 页面。
+5. 选择 **Update research data and deploy Pages**。
+6. 点击 **Run workflow**，选择 `main`，再确认运行。
+7. 等待 `build` 和 `deploy` 两个任务显示绿色勾号。
 
-建议配置 `CONTACT_EMAIL` 环境变量。它会用于 Crossref polite pool，只需在托管平台后台配置，不要写进代码或提交到 GitHub。
-
-## 二、使用 Render 获得固定 HTTPS 地址
-
-项目根目录已经包含 `render.yaml`，推荐使用 Render Blueprint 部署。
-
-### 1. 创建 Render 服务
-
-1. 打开 <https://dashboard.render.com/> 并使用 GitHub 登录。
-2. 授权 Render 读取 `hahha114157-ctrl/Paper-post` 仓库。
-3. 点击 **New**，选择 **Blueprint**。
-4. 选择 `Paper-post` 仓库。
-5. Render 会读取仓库中的 `render.yaml`，识别出名为 `paperscope` 的 Web Service。
-6. 确认并开始部署。
-
-### 2. 配置环境变量
-
-进入服务的 **Environment** 页面，增加：
+发布成功后，固定地址为：
 
 ```text
-CONTACT_EMAIL=你的联系邮箱
+https://hahha114157-ctrl.github.io/Paper-post/
 ```
 
-不要手动设置 `PORT`，Render 会自动提供。
+GitHub 会自动配置 HTTPS，不需要购买证书。
 
-### 3. 获取固定网址
+## 二、配置 Crossref 联系邮箱
 
-部署完成后，Render 会提供类似以下地址：
+这不是必需步骤，但可以降低 Crossref 限流概率：
 
-```text
-https://paperscope-xxxx.onrender.com
+1. 打开仓库 **Settings** → **Secrets and variables** → **Actions**。
+2. 点击 **New repository secret**。
+3. 名称填写 `CONTACT_EMAIL`。
+4. 值填写你的联系邮箱。
+5. 保存后重新运行 Pages 工作流。
+
+邮箱只会作为运行时环境变量使用，不会出现在网页或仓库代码中。
+
+## 三、自动更新时间
+
+工作流默认每天北京时间 06:30 执行一次：
+
+```yaml
+schedule:
+  - cron: "30 22 * * *"
 ```
 
-该地址就是固定 HTTPS 地址，可以收藏、分享或用于安装 PWA。
+GitHub Actions 使用 UTC，因此北京时间 06:30 对应前一天 UTC 22:30。GitHub 高负载时，计划任务可能延迟几分钟。
 
-### 4. 验证部署
+还可以通过以下方式更新：
 
-依次检查：
+- 推送代码到 `main`，自动构建发布。
+- 在 Actions 页面手动点击 **Run workflow**。
 
-- 打开网站首页，论文和官方资讯能够加载。
-- 打开 `https://你的地址/api/health`，应看到 `"ok": true`。
-- 点击“同步最新内容”，确认来源数量和同步时间更新。
-- 点击论文，确认详情、作者和原文链接正常。
+网页中的“检查最新数据”只会重新下载最近一次 Pages 发布的数据，不会直接启动 GitHub Actions。
 
-### Render 免费服务注意事项
+## 四、查看构建问题
 
-免费实例长时间无人访问时可能休眠，首次打开可能需要等待几十秒。休眠期间，进程内的 06:30 定时任务不会执行；但用户打开页面时仍会按缓存时效自动请求最新内容。需要严格每日定时同步时，应使用不会休眠的实例，或配置外部定时任务访问同步接口。
+如果网站没有更新：
 
-## 三、使用其他平台
+1. 打开仓库的 **Actions** 页面。
+2. 进入最近一次 **Update research data and deploy Pages** 运行记录。
+3. 查看 `Build static research digest` 步骤。
 
-也可以部署到 Railway、Fly.io、云服务器或 NAS。通用设置如下：
+常见情况：
 
-```text
-构建命令：无需构建，或 npm install
-启动命令：npm start
-健康检查：/api/health
-Node.js：18+
-```
+- arXiv、Crossref 或 RSS 暂时不可用。
+- Crossref 返回 HTTP 429，表示请求被限流。
+- GitHub Pages 尚未选择 GitHub Actions 作为来源。
+- 工作流没有 `pages: write` 和 `id-token: write` 权限。
 
-必须使用 HTTPS，PWA 安装和 Service Worker 在普通公网 HTTP 地址上无法正常工作。
+如果可靠论文少于 10 篇或官方资讯少于 3 条，构建会主动失败，不会用空内容覆盖上一次正常网站。
 
-## 四、安装为 Windows / macOS APP
+## 五、安装为 Windows / macOS APP
 
-推荐使用最新版 Edge 或 Chrome：
+使用最新版 Edge 或 Chrome：
 
-1. 使用浏览器打开部署后的 HTTPS 地址。
-2. 等待页面加载完成。
-3. 点击页面右上方出现的“安装为 APP”。
-4. 如果按钮没有出现：
+1. 打开 <https://hahha114157-ctrl.github.io/Paper-post/>。
+2. 等待页面和数据加载完成。
+3. 点击页面右上方的“安装为 APP”。
+4. 如果页面按钮没有出现：
    - Edge：点击地址栏右侧的“安装此站点作为应用”。
-   - Chrome：打开右上角菜单，选择“投放、保存和分享” → “安装 PaperScope”。
-5. 安装后可以从 Windows 开始菜单、任务栏或 macOS 启动台直接打开。
+   - Chrome：打开菜单，选择“投放、保存和分享” → “安装 PaperScope”。
+5. 安装后，可以从 Windows 开始菜单、任务栏或 macOS 启动台打开。
 
-卸载时，在已安装的 PaperScope 窗口菜单中选择“卸载 PaperScope”。
+卸载时，在 PaperScope 独立窗口的菜单中选择“卸载 PaperScope”。
 
-## 五、安装为 Android APP
+## 六、安装为 Android APP
 
-1. 使用 Chrome 打开部署后的 HTTPS 地址。
-2. 点击页面上的“安装为 APP”，或打开 Chrome 菜单。
+1. 使用 Chrome 打开固定网址。
+2. 点击“安装为 APP”，或者打开 Chrome 菜单。
 3. 选择“安装应用”或“添加到主屏幕”。
-4. 确认后，PaperScope 图标会出现在桌面和应用列表中。
+4. PaperScope 会出现在桌面和应用列表中。
 
-## 六、添加到 iPhone / iPad 主屏幕
+## 七、添加到 iPhone / iPad 主屏幕
 
-1. 必须使用 Safari 打开部署后的 HTTPS 地址。
-2. 点击底部或顶部的“分享”按钮。
-3. 向下滚动并选择“添加到主屏幕”。
-4. 确认名称为 PaperScope，然后点击“添加”。
+1. 使用 Safari 打开固定网址。
+2. 点击“分享”按钮。
+3. 选择“添加到主屏幕”。
+4. 确认名称并点击“添加”。
 
-iOS 不一定显示网页内的“安装为 APP”按钮，应使用 Safari 的“添加到主屏幕”。
+iOS 通常不显示网页内的安装按钮，需要通过 Safari 菜单完成。
 
-## 七、数据更新与通知边界
+## 八、自定义域名（可选）
 
-- 页面最多缓存论文 4 小时、官方资讯 2 小时。
-- 点击“同步最新内容”可以强制请求官方数据源。
-- 服务持续运行时，会在北京时间每天 06:30 同步一次。
-- APP 图标和静态界面可以离线打开，但论文和资讯更新仍需要网络。
-- 当前版本没有真正的后台 Web Push。关闭 APP 后主动收到通知，需要后续增加推送订阅数据库、VAPID 密钥和推送服务。
+不购买域名也可以一直使用免费的 `github.io` 地址。如果以后购买了域名：
 
-## 八、常见问题
+1. 在仓库 **Settings** → **Pages** 中填写 **Custom domain**。
+2. 在域名服务商处配置 GitHub Pages 要求的 `CNAME`、`A` 或 `ALIAS` 记录。
+3. DNS 生效后勾选 **Enforce HTTPS**。
 
-### 页面显示实时源不可用
+域名只是替换访问地址，不会改变数据更新方式。
 
-先检查 `/api/health`。如果健康检查正常，通常是某个外部数据源临时限流或网络不可达；页面会展示最近一次成功缓存，不会生成假论文。
+## 九、能力边界
 
-### Crossref 返回 429
-
-这是接口限流。不要连续频繁点击同步，并在托管平台配置 `CONTACT_EMAIL`。
-
-### 安装按钮没有出现
-
-确认使用 HTTPS、浏览器支持 PWA，并检查 `manifest.webmanifest` 与 `service-worker.js` 能否正常访问。iPhone/iPad 需要使用 Safari 的“添加到主屏幕”。
-
-### 每天 06:30 没有同步
-
-进程内定时任务要求服务器当时处于运行状态。免费托管实例休眠时不会执行，需要升级为常驻实例或使用外部定时任务。
+- GitHub Pages 不运行 Node 后端；所有数据在 GitHub Actions 构建期间生成。
+- 页面没有即时抓取按钮，最新数据取决于最近一次工作流发布。
+- PWA 静态界面和最近缓存的数据可离线打开，更新仍需要网络。
+- 真正的后台消息推送仍需要 Web Push 服务、订阅数据库和 VAPID 密钥。
