@@ -45,14 +45,24 @@ function toggleSave(id) {
   localStorage.setItem('paperscope-saved', JSON.stringify([...state.saved])); renderPapers();
   toast(state.saved.has(id) ? '已收藏论文' : '已取消收藏');
 }
-async function openPaper(id) {
+function summarizePaper(paper) {
+  const text = paper.abstract.replace(/\s+/g, ' ').trim();
+  const points = text.split(/(?<=[.!?。！？])\s+/).filter(Boolean).slice(0, 3);
+  const topic = paperTopics(paper)[0] || '人工智能方法';
+  return {
+    oneLine: `论文聚焦「${topic}」。以下结论严格基于来源摘要，不额外推测实验结果。`,
+    keyPoints: points,
+    limitation: paper.abstract.startsWith('这是一篇已由期刊登记 DOI') ? 'Crossref 未提供摘要，当前只能确认题名、作者、期刊和 DOI。' : '这是结构化摘要，不是大模型生成的中文全文解读。'
+  };
+}
+function openPaper(id) {
   el('modal').classList.add('open'); document.body.style.overflow = 'hidden';
   el('modal-title').textContent = '正在整理来源摘要…'; el('modal-meta').textContent = ''; el('modal-summary').textContent = '';
   el('modal-points').innerHTML = ''; el('modal-limitation').textContent = ''; el('modal-abstract').textContent = ''; el('modal-link').removeAttribute('href');
+  const paper = state.papers.find(item => item.id === id);
   try {
-    const response = await fetch(`/api/summary?id=${encodeURIComponent(id)}`);
-    if (!response.ok) throw new Error();
-    const { paper, summary } = await response.json();
+    if (!paper) throw new Error();
+    const summary = summarizePaper(paper);
     el('modal-title').textContent = paper.title;
     el('modal-meta').textContent = `${(paper.authors || []).slice(0, 6).join(', ') || '作者信息缺失'} · ${dateText(paper.published)} · ${paper.venue || paper.source}`;
     el('modal-summary').textContent = summary.oneLine;
@@ -78,31 +88,31 @@ function renderNews(data) {
   el('news-list').innerHTML = items.length ? items.slice(0, 12).map(item => `<a class="news-item" href="${escapeHtml(item.link)}" target="_blank" rel="noopener"><span class="news-source">${escapeHtml(item.source)} · OFFICIAL</span><h4>${escapeHtml(item.title)}</h4><p>${escapeHtml(item.summary || '打开官方原文查看详情。')}</p><span class="news-date">${escapeHtml(dateText(item.published))}</span></a>`).join('') : `<div class="empty">${escapeHtml(data.warning || '暂时没有官方资讯。')}</div>`;
 }
 function renderVenues(data) {
-  el('venue-note').textContent = `页面生成：${dateText(data.generatedAt, true)}。${data.note}`;
+  el('venue-note').textContent = `数据生成：${dateText(data.generatedAt, true)}。${data.note}`;
   el('venue-list').innerHTML = data.venues.map(venue => `<tr><td><b>${escapeHtml(venue.name)}</b><small>${escapeHtml(venue.type)} · 核验 ${escapeHtml(venue.verifiedAt)}</small></td><td><span class="status">${escapeHtml(venue.level)}</span></td><td class="deadline">${escapeHtml(venue.deadline)}</td><td>${escapeHtml(venue.speed)}</td><td><a class="official" href="${escapeHtml(venue.officialUrl)}" target="_blank" rel="noopener">${escapeHtml(venue.source)} ↗</a></td></tr>`).join('');
 }
 async function loadAll(force = false) {
-  const button = el('refresh'); button.disabled = true; button.textContent = '同步中…';
+  const button = el('refresh'); button.disabled = true; button.textContent = '检查中…';
   try {
-    const suffix = force ? '?refresh=1' : '';
-    const [papers, news, venues] = await Promise.all([
-      fetch(`/api/papers${suffix}`).then(response => { if (!response.ok) throw new Error('论文接口失败'); return response.json(); }),
-      fetch(`/api/news${suffix}`).then(response => { if (!response.ok) throw new Error('资讯接口失败'); return response.json(); }),
-      fetch('/api/venues').then(response => response.json())
+    const version = force ? `?v=${Date.now()}` : '';
+    const [papers, news, venues, digest] = await Promise.all([
+      fetch(`./data/papers.json${version}`, { cache: force ? 'reload' : 'default' }).then(response => { if (!response.ok) throw new Error('论文数据加载失败'); return response.json(); }),
+      fetch(`./data/news.json${version}`, { cache: force ? 'reload' : 'default' }).then(response => { if (!response.ok) throw new Error('资讯数据加载失败'); return response.json(); }),
+      fetch(`./data/venues.json${version}`, { cache: force ? 'reload' : 'default' }).then(response => response.json()),
+      fetch(`./data/digest.json${version}`, { cache: force ? 'reload' : 'default' }).then(response => response.json())
     ]);
     state.papers = papers.items || [];
     el('paper-count').textContent = state.papers.length ? `${state.papers.length} 篇可靠来源内容` : '没有可用的实时内容';
-    el('metric-papers').textContent = state.papers.length; el('metric-time').textContent = papers.fetchedAt ? dateText(papers.fetchedAt, true).slice(0, 5) : '—';
+    el('metric-papers').textContent = state.papers.length; el('metric-time').textContent = papers.generatedAt ? dateText(papers.generatedAt, true).slice(0, 5) : '—';
     el('provider').textContent = Object.entries(papers.providers || {}).map(([name, count]) => `${name} ${count}`).join(' · ').toUpperCase();
-    const warnings = [papers.warning, news.warning, ...(papers.errors || []), ...(news.errors || [])].filter(Boolean);
+    const warnings = [...(papers.errors || []), ...(news.errors || [])].filter(Boolean);
     el('notice').textContent = warnings.join('；'); el('notice').classList.toggle('show', warnings.length > 0);
-    renderPapers(); renderNews(news); renderVenues(venues);
-    const digest = await fetch('/api/digest').then(response => response.json()); setDigest(digest);
-    if (force) toast(`同步完成：${state.papers.length} 篇论文，${(news.items || []).length} 条官方资讯`);
+    renderPapers(); renderNews(news); renderVenues(venues); setDigest(digest);
+    if (force) toast(`已检查：数据生成于 ${dateText(papers.generatedAt, true)}`);
   } catch (error) {
     el('paper-list').innerHTML = '<div class="empty">无法连接本地服务。请确认 PaperScope 服务已经启动。</div>';
     el('news-list').innerHTML = '<div class="empty">资讯接口不可用。</div>'; toast(error.message || '同步失败');
-  } finally { button.disabled = false; button.textContent = '↻ 同步最新内容'; }
+  } finally { button.disabled = false; button.textContent = '↻ 检查最新数据'; }
 }
 
 el('refresh').addEventListener('click', () => loadAll(true));
@@ -117,14 +127,14 @@ document.querySelectorAll('.nav button').forEach(button => button.addEventListen
 el('modal').addEventListener('click', event => { if (event.target === el('modal') || event.target.closest('.close')) closeModal(); });
 document.addEventListener('keydown', event => { if (event.key === 'Escape') closeModal(); });
 el('check-venues').addEventListener('click', async () => {
-  const button = el('check-venues'); button.disabled = true; button.textContent = '检查中…';
-  try { const data = await fetch('/api/venues/check').then(response => response.json()); const up = data.results.filter(item => item.reachable).length; toast(`官网连通性：${up}/${data.results.length} 可访问`); }
-  catch { toast('官网连通性检查失败'); } finally { button.disabled = false; button.textContent = '检查官网'; }
+  const button = el('check-venues'); button.disabled = true; button.textContent = '载入中…';
+  try { const data = await fetch(`./data/venues.json?v=${Date.now()}`, { cache: 'reload' }).then(response => response.json()); renderVenues(data); toast(`会议数据生成于 ${dateText(data.generatedAt, true)}`); }
+  catch { toast('会议信息载入失败'); } finally { button.disabled = false; button.textContent = '重新载入'; }
 });
 
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); state.installPrompt = event; el('install-app').classList.add('show'); });
 el('install-app').addEventListener('click', async () => { if (!state.installPrompt) return; state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; el('install-app').classList.remove('show'); });
 window.addEventListener('appinstalled', () => toast('PaperScope 已安装'));
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('./service-worker.js').catch(() => {});
 
 loadAll();
