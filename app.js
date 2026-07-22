@@ -2,6 +2,7 @@ const STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
 const LEGACY_SAVED_KEY = 'paperscope-saved';
 const THEME_KEY = 'paperscope-theme';
+const FILTER_KEY_PREFIX = 'paperscope-quality-filters-v1-';
 const el = id => document.getElementById(id);
 
 const AREA_CONFIG = {
@@ -29,9 +30,9 @@ const AREA_CONFIG = {
   }
 };
 
-const ROUTE_NAMES = { home: '概览', ai: 'AI 论文', architecture: '体系结构', library: '个人文献库', news: '研究资讯', venues: '会议期刊', paper: '论文详情' };
+const ROUTE_NAMES = { home: '概览', ai: 'AI 论文', architecture: '体系结构', curated: '顶会期刊精选', library: '个人文献库', news: '研究资讯', venues: '会议期刊', paper: '论文详情' };
 const state = {
-  datasets: { ai: null, architecture: null }, news: null, venues: null, loaded: false,
+  datasets: { ai: null, architecture: null }, news: null, venues: null, curated: null, loaded: false,
   compare: new Set(), batch: new Set(), returnHash: null, selectedPaperId: null,
   installPrompt: null, searchTimer: null
 };
@@ -41,12 +42,12 @@ function defaultLibrary() {
   return {
     version: 3,
     profile: { name: '研究者', focus: 'AI · 计算机体系结构', bio: '建立自己的研究脉络。', createdAt: new Date().toISOString() },
-    records: {}, collections: {}, savedVenues: []
+    records: {}, collections: {}, savedVenues: [], dailyProgress: {}
   };
 }
 function migrateLibrary() {
   const current = readJson(STORAGE_KEY, null);
-  if (current?.version === 3) return { ...defaultLibrary(), ...current, profile: { ...defaultLibrary().profile, ...(current.profile || {}) }, records: current.records || {}, collections: current.collections || {}, savedVenues: current.savedVenues || [] };
+  if (current?.version === 3) return { ...defaultLibrary(), ...current, profile: { ...defaultLibrary().profile, ...(current.profile || {}) }, records: current.records || {}, collections: current.collections || {}, savedVenues: current.savedVenues || [], dailyProgress: current.dailyProgress || {} };
   const old = readJson(V2_STORAGE_KEY, null);
   if (!old?.records) return defaultLibrary();
   const records = Object.fromEntries(Object.entries(old.records).map(([id, record]) => [id, {
@@ -66,6 +67,14 @@ function dateText(value, withTime = false) {
   if (!value || Number.isNaN(new Date(value).getTime())) return '—';
   return new Intl.DateTimeFormat('zh-CN', withTime ? { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' } : { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
 }
+function paperDateText(paper) {
+  const value = paper?.publication?.published || paper?.published; if (!value) return '日期待核验';
+  const date = new Date(value); if (Number.isNaN(date.getTime())) return '日期待核验';
+  if (paper?.publication?.datePrecision === 'year') return `${date.getUTCFullYear()} 年`;
+  if (paper?.publication?.datePrecision === 'month') return `${date.getUTCFullYear()} 年 ${String(date.getUTCMonth() + 1).padStart(2, '0')} 月`;
+  return dateText(value);
+}
+function shanghaiToday() { return new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 10); }
 function slug(value = '') { return value.normalize('NFKD').replace(/[^a-zA-Z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase().slice(0, 42) || 'paper'; }
 function parseRoute() {
   const raw = location.hash.startsWith('#/') ? location.hash.slice(2) : 'home';
@@ -86,7 +95,7 @@ function allPapers() { return [...(state.datasets.ai?.items || []), ...(state.da
 function getPaper(id) { return allPapers().find(item => item.id === id) || library.records[id]?.paper || null; }
 function getRecord(id) { return library.records[id] || null; }
 function snapshotPaper(paper) {
-  return { id: paper.id, arxivId: paper.arxivId || null, title: paper.title, abstract: paper.abstract || '', authors: paper.authors || [], published: paper.published || null, updated: paper.updated || null, venue: paper.venue || '', link: safeUrl(paper.link), source: paper.source || '', kind: paper.kind || 'preprint', doi: paper.doi || null, journalRef: paper.journalRef || null, area: paper.area || 'ai', publication: paper.publication || null };
+  return { id: paper.id, arxivId: paper.arxivId || null, arxivUrl: paper.arxivUrl || null, title: paper.title, abstract: paper.abstract || '', authors: paper.authors || [], published: paper.published || null, updated: paper.updated || null, venue: paper.venue || '', venueName: paper.venueName || null, venueYear: paper.venueYear || null, venueType: paper.venueType || null, track: paper.track || '', officialUrl: paper.officialUrl || null, link: safeUrl(paper.link), source: paper.source || '', kind: paper.kind || 'preprint', doi: paper.doi || null, journalRef: paper.journalRef || null, citationCount: Number(paper.citationCount || 0), qualityScore: Number(paper.qualityScore || 0), quality: paper.quality || null, area: paper.area || 'ai', publication: paper.publication || null };
 }
 function ensureRecord(paper) {
   if (!paper) return null; const old = library.records[paper.id] || {};
@@ -104,7 +113,7 @@ function paperTopics(paper) {
 }
 function publicationInfo(record, paper) {
   const info = record?.publication || paper?.publication;
-  if (info?.status === 'published' || paper?.kind === 'published' || paper?.doi || paper?.journalRef) return { ...info, status: 'published', label: `已发表${info?.venue || paper?.journalRef || paper?.venue ? ` · ${info?.venue || paper?.journalRef || paper?.venue}` : ''}` };
+  if (info?.status === 'published' || paper?.kind === 'published' || paper?.doi || paper?.journalRef) return { ...info, status: 'published', label: `已正式收录${info?.venue || paper?.journalRef || paper?.venue ? ` · ${info?.venue || paper?.journalRef || paper?.venue}` : ''}` };
   if (info?.status === 'not-found') return { ...info, label: '暂未匹配到正式版本' };
   if (info?.status === 'error') return { ...info, label: '上次检查失败' };
   return { status: 'unchecked', label: '尚未检查' };
@@ -119,7 +128,7 @@ function setActiveNav(name) {
   document.querySelectorAll('#main-nav [data-route]').forEach(button => button.classList.toggle('active', button.dataset.route === active));
   el('route-title').textContent = ROUTE_NAMES[name] || 'PaperScope';
 }
-function currentSearchableRoute(route) { return ['ai', 'architecture', 'library', 'news', 'venues'].includes(route.name); }
+function currentSearchableRoute(route) { return ['ai', 'architecture', 'curated', 'library', 'news', 'venues'].includes(route.name); }
 function syncTopSearch(route) {
   const input = el('global-search'); input.value = route.query.q || '';
   input.placeholder = route.name === 'home' ? '搜索全部论文，按 Enter' : route.name === 'venues' ? '搜索会议或期刊' : route.name === 'news' ? '搜索资讯' : '搜索当前页面';
@@ -131,6 +140,7 @@ function renderRoute() {
   if (route.name !== 'paper') { state.returnHash = null; closeDrawer(false); }
   if (route.name === 'home') { showView('home'); renderHome(); }
   else if (route.name === 'ai' || route.name === 'architecture') { showView('papers'); renderPaperPage(route.name, route); }
+  else if (route.name === 'curated') { showView('curated'); renderCuratedPage(route); }
   else if (route.name === 'library') { showView('library'); renderLibraryPage(route); }
   else if (route.name === 'news') { showView('news'); renderNewsPage(route); }
   else if (route.name === 'venues') { showView('venues'); renderVenuePage(route); }
@@ -145,8 +155,31 @@ function renderRoute() {
 }
 
 function renderPreviewPapers(target, papers) {
-  el(target).innerHTML = papers.slice(0, 6).map(paper => `<article class="preview-paper"><button data-open-paper="${escapeHtml(paper.id)}"><h4>${escapeHtml(paper.title)}</h4><p>${escapeHtml(dateText(paper.published))} · ${escapeHtml(paper.source)}</p></button><button class="small" data-compare="${escapeHtml(paper.id)}" title="加入对比">＋</button></article>`).join('');
+  el(target).innerHTML = papers.slice(0, 6).map(paper => `<article class="preview-paper"><button data-open-paper="${escapeHtml(paper.id)}"><h4>${escapeHtml(paper.title)}</h4><p>${escapeHtml(paperDateText(paper))} · ${escapeHtml(paper.venueName || paper.venue || paper.source)}${paper.qualityScore ? ` · 推荐 ${paper.qualityScore}` : ''}</p></button><button class="small" data-compare="${escapeHtml(paper.id)}" title="加入对比">＋</button></article>`).join('');
 }
+function todayRecommendation() {
+  const items = state.curated?.daily?.items || []; const today = shanghaiToday();
+  return items.find(item => item.date === today) || items[0] || null;
+}
+function renderDaily(prefix) {
+  const recommendation = todayRecommendation(); const paper = recommendation ? getPaper(recommendation.paperId) : null;
+  if (!recommendation || !paper) { el(`${prefix}-daily-title`).textContent = '今日推荐正在生成'; el(`${prefix}-daily-meta`).textContent = '请稍后刷新数据。'; return; }
+  state.dailyPaperId = paper.id; el(`${prefix}-daily-title`).textContent = paper.title;
+  el(`${prefix}-daily-meta`).textContent = `${paper.venueName || paper.venue || paper.source} ${paper.venueYear || ''} · ${paperDateText(paper)} · 推荐分 ${paper.qualityScore || '—'}`;
+  el(`${prefix}-daily-reason`).textContent = `推荐理由：${recommendation.reason || '正式收录且与重点研究方向相关'}`;
+  el(`${prefix}-daily-plan`).innerHTML = recommendation.readingPlan.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+  const done = Boolean(library.dailyProgress?.[recommendation.date]?.completedAt); el(`${prefix}-daily-done`).textContent = done ? '✓ 今日已完成' : prefix === 'home' ? '完成今日阅读' : '完成打卡'; el(`${prefix}-daily-done`).classList.toggle('primary', done);
+  if (prefix === 'curated') el('curated-daily-questions').innerHTML = recommendation.focusQuestions.map(item => `<li>${escapeHtml(item)}</li>`).join('');
+}
+function completeDaily() {
+  const recommendation = todayRecommendation(); if (!recommendation) return toast('今日推荐尚未生成');
+  library.dailyProgress ||= {}; const done = library.dailyProgress[recommendation.date]?.completedAt;
+  library.dailyProgress[recommendation.date] = done ? {} : { paperId: recommendation.paperId, completedAt: new Date().toISOString() };
+  if (!done) { const record = ensureRecord(getPaper(recommendation.paperId)); record.readAt ||= new Date().toISOString(); record.progress = 100; }
+  saveLibrary(); renderCurrentView(); toast(done ? '已取消今日打卡' : '今日阅读计划已完成');
+}
+function queueDaily() { const recommendation = todayRecommendation(); if (!recommendation) return toast('今日推荐尚未生成'); const record = ensureRecord(getPaper(recommendation.paperId)); record.queueAt ||= new Date().toISOString(); saveLibrary(); renderCurrentView(); toast('已加入阅读队列'); }
+function openDaily() { const recommendation = todayRecommendation(); if (recommendation) openPaperRoute(recommendation.paperId); }
 function libraryStats() {
   const records = Object.values(library.records).filter(record => record?.paper);
   return {
@@ -161,6 +194,7 @@ function renderHome() {
   el('home-summary').textContent = `${ai.summary || ''} 体系结构侧重点为「${arch.topics?.[0]?.name || '暂无'}」。`;
   el('home-ai-count').textContent = ai.items.length; el('home-arch-count').textContent = arch.items.length; el('home-sync').textContent = dateText(ai.generatedAt, true).slice(0, 5);
   renderPreviewPapers('home-ai-list', ai.items); renderPreviewPapers('home-arch-list', arch.items);
+  renderDaily('home');
   el('home-saved').textContent = stats.saved; el('home-queue').textContent = stats.queue; el('home-read').textContent = stats.read; el('home-notes').textContent = stats.notes;
   const topics = [...ai.topics.slice(0, 2).map(item => ({ ...item, area: 'AI' })), ...arch.topics.slice(0, 2).map(item => ({ ...item, area: 'ARCH' }))].sort((a, b) => b.count - a.count);
   const max = topics[0]?.count || 1;
@@ -171,10 +205,10 @@ function renderHome() {
 }
 
 function getPaperFilters(area, route) {
-  const memory = readJson(`paperscope-filters-${area}`, {});
+  const memory = readJson(`${FILTER_KEY_PREFIX}${area}`, {});
   return {
-    q: route.query.q || '', topic: route.query.topic || memory.topic || 'all', source: route.query.source || memory.source || 'all',
-    status: route.query.status || memory.status || 'all', sort: route.query.sort || memory.sort || 'newest',
+    q: route.query.q || '', topic: route.query.topic || memory.topic || 'all', venue: route.query.venue || memory.venue || 'all', source: route.query.source || memory.source || 'all',
+    status: route.query.status || memory.status || 'all', sort: route.query.sort || memory.sort || 'recommended',
     size: [12, 24, 48].includes(Number(route.query.size || memory.size)) ? Number(route.query.size || memory.size) : 12,
     page: Math.max(1, Number(route.query.page || 1))
   };
@@ -185,6 +219,7 @@ function filterPapers(area, filters) {
     const record = getRecord(paper.id); const text = `${paper.title} ${paper.abstract} ${(paper.authors || []).join(' ')} ${paper.venue || ''}`.toLowerCase();
     if (filters.q && !text.includes(filters.q.toLowerCase())) return false;
     if (pattern && !pattern.test(`${paper.title} ${paper.abstract}`)) return false;
+    if (filters.venue !== 'all' && (paper.venueName || paper.venue || paper.source) !== filters.venue) return false;
     if (filters.source !== 'all' && paper.source !== filters.source) return false;
     if (filters.status === 'preprint' && publicationInfo(record, paper).status === 'published') return false;
     if (filters.status === 'published' && publicationInfo(record, paper).status !== 'published') return false;
@@ -192,29 +227,43 @@ function filterPapers(area, filters) {
     if (filters.status === 'unread' && record?.readAt) return false;
     return true;
   });
-  return items.sort((a, b) => filters.sort === 'oldest' ? new Date(a.published) - new Date(b.published) : filters.sort === 'title' ? a.title.localeCompare(b.title) : new Date(b.published) - new Date(a.published));
+  return items.sort((a, b) => filters.sort === 'recommended' ? Number(b.qualityScore || 0) - Number(a.qualityScore || 0) || new Date(b.published) - new Date(a.published) : filters.sort === 'oldest' ? new Date(a.published) - new Date(b.published) : filters.sort === 'title' ? a.title.localeCompare(b.title) : new Date(b.published) - new Date(a.published));
 }
 function renderPaperPage(area, route) {
   const config = AREA_CONFIG[area]; const filters = getPaperFilters(area, route); const items = filterPapers(area, filters);
   const pages = Math.max(1, Math.ceil(items.length / filters.size)); filters.page = Math.min(filters.page, pages);
   const start = (filters.page - 1) * filters.size; const pageItems = items.slice(start, start + filters.size);
-  el('papers-eyebrow').textContent = config.eyebrow; el('papers-title').textContent = config.title; el('papers-subtitle').textContent = `${config.subtitle} 当前数据源：${Object.entries(state.datasets[area].providers || {}).map(([name, count]) => `${name} ${count}`).join(' · ')}`;
+  el('papers-eyebrow').textContent = config.eyebrow; el('papers-title').textContent = config.title; el('papers-subtitle').textContent = `${config.subtitle} 默认按顶会/期刊质量、影响力与主题价值排序，新鲜度仅为弱信号。`;
   el('paper-topic').innerHTML = `<option value="all">全部主题</option>${config.topics.map(([name]) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}`;
-  el('paper-topic').value = filters.topic; el('paper-source').value = filters.source; el('paper-status').value = filters.status; el('paper-sort').value = filters.sort; el('paper-page-size').value = String(filters.size);
-  localStorage.setItem(`paperscope-filters-${area}`, JSON.stringify({ topic: filters.topic, source: filters.source, status: filters.status, sort: filters.sort, size: filters.size }));
+  const venues = [...new Set(state.datasets[area].items.map(paper => paper.venueName || paper.venue || paper.source))].sort(); const sources = [...new Set(state.datasets[area].items.map(paper => paper.source))].sort();
+  el('paper-venue').innerHTML = `<option value="all">全部会议/期刊</option>${venues.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}`;
+  el('paper-source').innerHTML = `<option value="all">全部来源</option>${sources.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}`;
+  el('paper-topic').value = filters.topic; el('paper-venue').value = filters.venue; el('paper-source').value = filters.source; el('paper-status').value = filters.status; el('paper-sort').value = filters.sort; el('paper-page-size').value = String(filters.size);
+  localStorage.setItem(`${FILTER_KEY_PREFIX}${area}`, JSON.stringify({ topic: filters.topic, venue: filters.venue, source: filters.source, status: filters.status, sort: filters.sort, size: filters.size }));
   el('paper-result-count').textContent = `找到 ${items.length} 篇 · 第 ${filters.page}/${pages} 页`;
   el('paper-list').innerHTML = pageItems.length ? pageItems.map((paper, index) => paperRow(paper, start + index + 1)).join('') : '<div class="empty">没有符合当前条件的论文。</div>';
   renderPagination('paper-pagination', filters.page, pages, page => navigate(area, { ...filters, page }));
 }
 function paperRow(paper, index) {
   const record = getRecord(paper.id); const info = publicationInfo(record, paper); const checked = state.compare.has(paper.id);
-  return `<article class="paper-row ${record?.readAt ? 'read' : ''}" data-paper-id="${escapeHtml(paper.id)}"><input class="check" type="checkbox" data-action="compare" aria-label="加入对比" ${checked ? 'checked' : ''}><span class="paper-index">${String(index).padStart(2, '0')}</span><div class="paper-main"><button class="paper-title" data-action="open"><h3>${escapeHtml(paper.title)}</h3></button><p>${escapeHtml(paper.abstract)}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span><span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.status === 'published' ? '已发表' : '预印本')}</span><span class="tag">${escapeHtml(dateText(paper.published))}</span>${record?.note ? '<span class="tag note">有笔记</span>' : ''}${paperTopics(paper).map(topic => `<span class="tag">${escapeHtml(topic)}</span>`).join('')}</div></div><div class="paper-actions"><button data-action="read" class="${record?.readAt ? 'active' : ''}" title="已读">✓</button><button data-action="queue" class="${record?.queueAt ? 'active' : ''}" title="阅读队列">＋</button><button data-action="save" class="${record?.savedAt ? 'saved' : ''}" title="收藏">${record?.savedAt ? '★' : '☆'}</button></div></article>`;
+  return `<article class="paper-row ${record?.readAt ? 'read' : ''}" data-paper-id="${escapeHtml(paper.id)}"><input class="check" type="checkbox" data-action="compare" aria-label="加入对比" ${checked ? 'checked' : ''}><span class="paper-index">${String(index).padStart(2, '0')}</span><div class="paper-main"><button class="paper-title" data-action="open"><h3>${escapeHtml(paper.title)}</h3></button><p>${escapeHtml(paper.abstract)}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span>${paper.quality?.tier ? `<span class="tag quality-badge">${escapeHtml(paper.quality.tier)} · ${paper.qualityScore}</span>` : ''}<span class="tag venue-badge">${escapeHtml(`${paper.venueName || paper.venue || paper.source}${paper.venueYear ? ` ${paper.venueYear}` : ''}`)}</span><span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.status === 'published' ? '正式收录' : '预印本')}</span><span class="tag">${escapeHtml(paperDateText(paper))}</span>${record?.note ? '<span class="tag note">有笔记</span>' : ''}${paperTopics(paper).map(topic => `<span class="tag">${escapeHtml(topic)}</span>`).join('')}</div></div><div class="paper-actions"><button data-action="read" class="${record?.readAt ? 'active' : ''}" title="已读">✓</button><button data-action="queue" class="${record?.queueAt ? 'active' : ''}" title="阅读队列">＋</button><button data-action="save" class="${record?.savedAt ? 'saved' : ''}" title="收藏">${record?.savedAt ? '★' : '☆'}</button></div></article>`;
 }
 function renderPagination(target, page, total, onPage) {
   const node = el(target); if (total <= 1) { node.innerHTML = ''; return; }
   const pages = [...new Set([1, total, page - 2, page - 1, page, page + 1, page + 2].filter(value => value >= 1 && value <= total))].sort((a, b) => a - b);
   node.innerHTML = `<button data-page="${page - 1}" ${page === 1 ? 'disabled' : ''}>←</button>${pages.map((value, index) => `${index && value - pages[index - 1] > 1 ? '<span>…</span>' : ''}<button data-page="${value}" class="${value === page ? 'active' : ''}">${value}</button>`).join('')}<button data-page="${page + 1}" ${page === total ? 'disabled' : ''}>→</button>`;
   node.onclick = event => { const button = event.target.closest('[data-page]'); if (button && !button.disabled) onPage(Number(button.dataset.page)); };
+}
+
+function renderCuratedPage(route) {
+  const area = route.query.area || 'all'; const venue = route.query.venue || 'all'; const q = (route.query.q || '').toLowerCase(); const sections = state.curated.sections || [];
+  const venues = [...new Set(sections.map(section => section.venue))].sort(); el('curated-area').value = area; el('curated-venue').innerHTML = `<option value="all">全部会议/期刊</option>${venues.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}`; el('curated-venue').value = venue;
+  el('curated-methodology').textContent = `${state.curated.methodology} ${state.curated.daily?.methodology || ''}`; renderDaily('curated');
+  const filtered = sections.filter(section => (area === 'all' || section.area === area) && (venue === 'all' || section.venue === venue)).map(section => ({ ...section, papers: section.paperIds.map(getPaper).filter(Boolean).filter(paper => !q || `${paper.title} ${paper.abstract}`.toLowerCase().includes(q)).sort((a, b) => Number(b.qualityScore || 0) - Number(a.qualityScore || 0)) })).filter(section => section.papers.length);
+  el('curated-count').textContent = `${filtered.length} 个专栏 · ${filtered.reduce((sum, section) => sum + section.papers.length, 0)} 篇精选`;
+  el('curated-sections').innerHTML = filtered.map(section => `<section class="curated-section"><div class="curated-section-head"><div class="eyebrow">${escapeHtml(`${section.type} · ${section.year}`)}</div><h2>${escapeHtml(section.title)}</h2><p>${escapeHtml(section.subtitle)}</p><a href="${escapeHtml(safeUrl(section.officialUrl))}" target="_blank" rel="noopener">${escapeHtml(section.source)} ↗</a></div>${section.papers.slice(0, 8).map(paper => `<article class="preview-paper"><button data-open-paper="${escapeHtml(paper.id)}"><h4>${escapeHtml(paper.title)}</h4><p>推荐 ${paper.qualityScore || '—'} · ${escapeHtml(paper.track || paperDateText(paper))}</p></button><button class="small" data-compare="${escapeHtml(paper.id)}">＋</button></article>`).join('')}<div class="card-head"><button class="small" data-curated-venue="${escapeHtml(section.venue)}">只看此专栏</button><span class="mono">${section.papers.length} PAPERS</span></div></section>`).join('') || '<div class="empty">没有符合当前条件的正式收录专栏。</div>';
+  const today = shanghaiToday(); el('daily-cadence').textContent = state.curated.daily?.cadence || '';
+  el('daily-schedule').innerHTML = (state.curated.daily?.items || []).map(item => { const paper = getPaper(item.paperId); if (!paper) return ''; const done = Boolean(library.dailyProgress?.[item.date]?.completedAt); return `<div class="schedule-row ${item.date === today ? 'today' : ''}"><span class="mono">${item.date === today ? '今天' : escapeHtml(item.date.slice(5))}${done ? ' · ✓' : ''}</span><div><b>${escapeHtml(paper.title)}</b><p>${escapeHtml(`${paper.venueName || paper.venue || paper.source} · ${item.reason}`)}</p></div><button class="small" data-open-paper="${escapeHtml(paper.id)}">查看</button></div>`; }).join('');
 }
 
 function toggleRecordField(id, field) {
@@ -299,9 +348,14 @@ function highlightedAbstract(text, highlights) {
 function openPaperRoute(id) { state.returnHash = parseRoute().name === 'paper' ? state.returnHash : location.hash; location.hash = `#/paper/${encodeURIComponent(id)}`; }
 function openDrawer(id) {
   const paper = getPaper(id); if (!paper) return; state.selectedPaperId = id; markOpened(id); const record = ensureRecord(paper); const summary = summarizePaper(paper);
-  el('detail-title').textContent = paper.title; el('detail-meta').textContent = `${(paper.authors || []).slice(0, 8).join(', ') || '作者信息缺失'} · ${dateText(paper.published)} · ${paper.venue || paper.source}`;
+  el('detail-title').textContent = paper.title; el('detail-meta').textContent = `${(paper.authors || []).slice(0, 8).join(', ') || '作者信息缺失'} · ${paperDateText(paper)} · ${paper.venueName || paper.venue || paper.source}${paper.track ? ` · ${paper.track}` : ''}`;
   el('detail-summary').textContent = summary.oneLine; el('detail-points').innerHTML = summary.points.map(point => `<li>${escapeHtml(point)}</li>`).join(''); el('detail-limitation').textContent = summary.limitation;
   el('detail-link').href = safeUrl(paper.link); el('paper-note').value = record.note || ''; el('paper-tags').value = (record.tags || []).join(', '); el('reading-progress').value = String(record.progress || 0); renderCollectionOptions();
+  const info = publicationInfo(record, paper); el('detail-venue-title').textContent = info.status === 'published' ? `${paper.venueName || info.venue || paper.venue || '正式版本'}${paper.venueYear ? ` ${paper.venueYear}` : ''} · 已正式收录` : '当前为预印本，尚未核验正式收录';
+  el('detail-venue-date').textContent = info.status === 'published' ? `收录/出版时间：${info.published ? paperDateText({ ...paper, publication: info }) : '正式版本已匹配，具体日期待官方元数据核验'}${paper.doi || info.doi ? ` · DOI ${paper.doi || info.doi}` : ''}` : `arXiv 上传时间：${dateText(paper.published)}`;
+  el('detail-quality-reason').textContent = paper.quality?.reasons?.length ? `推荐依据：${paper.quality.reasons.join('；')} · 推荐分 ${paper.qualityScore}` : '当前未获得旗舰会议/期刊质量标记，请结合原文自行判断。';
+  const official = paper.officialUrl || info.url || (paper.doi ? `https://doi.org/${paper.doi}` : null); el('detail-official-link').href = official ? safeUrl(official) : '#'; el('detail-official-link').classList.toggle('hidden', !official);
+  const arxiv = paper.arxivUrl || (paper.source === 'arXiv' ? paper.link : null); el('detail-arxiv-link').href = arxiv ? safeUrl(arxiv) : '#'; el('detail-arxiv-link').classList.toggle('hidden', !arxiv);
   renderDrawerActions(); renderHighlights(); updateDetailNavigation(); el('drawer-overlay').classList.add('open'); el('paper-drawer').classList.add('open'); document.body.style.overflow = 'hidden';
 }
 function closeDrawer(navigateBack = true) {
@@ -370,7 +424,7 @@ function renderCompare() {
 
 const COMMAND_PAGES = [
   { label: '今日概览', hint: 'Home', route: 'home' }, { label: 'AI 论文', hint: 'Algorithms & Models', route: 'ai' }, { label: '体系结构论文', hint: 'Hardware & Systems', route: 'architecture' },
-  { label: '个人文献库', hint: 'Saved & Notes', route: 'library/saved' }, { label: '研究资讯', hint: 'Official News', route: 'news' }, { label: '会议与期刊', hint: 'Venues', route: 'venues' }
+  { label: '顶会期刊精选', hint: 'Quality-first & Daily', route: 'curated' }, { label: '个人文献库', hint: 'Saved & Notes', route: 'library/saved' }, { label: '研究资讯', hint: 'Official News', route: 'news' }, { label: '会议与期刊', hint: 'Venues', route: 'venues' }
 ];
 function renderCommands(query = '') {
   const normalized = query.toLowerCase(); const pages = COMMAND_PAGES.filter(item => !normalized || `${item.label} ${item.hint}`.toLowerCase().includes(normalized)); const papers = normalized ? allPapers().filter(paper => `${paper.title} ${(paper.authors || []).join(' ')}`.toLowerCase().includes(normalized)).slice(0, 8) : [];
@@ -395,9 +449,9 @@ function syncLibraryPapers() { for (const paper of allPapers()) { const record =
 async function loadData(force = false) {
   try {
     const suffix = force ? `?v=${Date.now()}` : ''; const get = async path => { const response = await fetch(`${path}${suffix}`, { cache: force ? 'reload' : 'default' }); if (!response.ok) throw new Error(`${path} 加载失败`); return response.json(); };
-    const [papers, architecture, news, venues, digest] = await Promise.all([get('./data/papers.json'), get('./data/architecture.json'), get('./data/news.json'), get('./data/venues.json'), get('./data/digest.json')]);
-    state.datasets.ai = { ...papers, ...digest }; state.datasets.architecture = architecture; state.news = news; state.venues = venues; state.loaded = true;
-    migrateLegacySaved(); syncLibraryPapers(); renderProfile(); el('side-sync').textContent = `${dateText(papers.generatedAt, true)} · ${papers.items.length + architecture.items.length} 篇`;
+    const [papers, architecture, news, venues, digest, curated] = await Promise.all([get('./data/papers.json'), get('./data/architecture.json'), get('./data/news.json'), get('./data/venues.json'), get('./data/digest.json'), get('./data/curated.json')]);
+    state.datasets.ai = { ...papers, ...digest }; state.datasets.architecture = architecture; state.news = news; state.venues = venues; state.curated = curated; state.loaded = true;
+    migrateLegacySaved(); syncLibraryPapers(); renderProfile(); el('side-sync').textContent = `${dateText(papers.generatedAt, true)} · ${papers.items.length + architecture.items.length} 篇 · ${curated.sections.length} 专栏`;
     renderRoute(); if (force) toast(`已检查：数据生成于 ${dateText(papers.generatedAt, true)}`);
   } catch (error) { toast(error.message || '数据加载失败'); document.querySelectorAll('.paper-list').forEach(node => { node.innerHTML = '<div class="empty">无法加载已发布数据，请稍后刷新。</div>'; }); }
 }
@@ -407,22 +461,27 @@ document.addEventListener('click', event => {
   const open = event.target.closest('[data-open-paper]'); if (open) return openPaperRoute(open.dataset.openPaper);
   const compare = event.target.closest('[data-compare]'); if (compare) return toggleCompare(compare.dataset.compare);
   const venueSave = event.target.closest('[data-venue-save]'); if (venueSave) return toggleVenueSave(venueSave.dataset.venueSave);
+  const curatedVenue = event.target.closest('[data-curated-venue]'); if (curatedVenue) return navigate('curated', { venue: curatedVenue.dataset.curatedVenue });
   const close = event.target.closest('[data-close-modal]'); if (close) return closeModal(close.dataset.closeModal);
 });
 el('paper-list').addEventListener('click', event => {
   const row = event.target.closest('[data-paper-id]'); if (!row) return; const action = event.target.closest('[data-action]')?.dataset.action;
   if (action === 'open') openPaperRoute(row.dataset.paperId); else if (action === 'save') toggleRecordField(row.dataset.paperId, 'saved'); else if (action === 'queue') toggleRecordField(row.dataset.paperId, 'queue'); else if (action === 'read') toggleRecordField(row.dataset.paperId, 'read'); else if (action === 'compare') toggleCompare(row.dataset.paperId);
 });
-['paper-topic', 'paper-source', 'paper-status', 'paper-sort', 'paper-page-size'].forEach(id => el(id).addEventListener('change', () => {
-  const route = parseRoute(); navigate(route.name, { ...route.query, topic: el('paper-topic').value, source: el('paper-source').value, status: el('paper-status').value, sort: el('paper-sort').value, size: el('paper-page-size').value, page: 1 });
+['paper-topic', 'paper-venue', 'paper-source', 'paper-status', 'paper-sort', 'paper-page-size'].forEach(id => el(id).addEventListener('change', () => {
+  const route = parseRoute(); navigate(route.name, { ...route.query, topic: el('paper-topic').value, venue: el('paper-venue').value, source: el('paper-source').value, status: el('paper-status').value, sort: el('paper-sort').value, size: el('paper-page-size').value, page: 1 });
 }));
-el('papers-reset').addEventListener('click', () => { const route = parseRoute(); localStorage.removeItem(`paperscope-filters-${route.name}`); navigate(route.name); });
+el('papers-reset').addEventListener('click', () => { const route = parseRoute(); localStorage.removeItem(`${FILTER_KEY_PREFIX}${route.name}`); localStorage.removeItem(`paperscope-filters-${route.name}`); navigate(route.name); });
 el('global-search').addEventListener('input', event => {
   const route = parseRoute(); clearTimeout(state.searchTimer); if (!currentSearchableRoute(route)) return;
   state.searchTimer = setTimeout(() => setQuery({ q: event.target.value.trim(), page: 1 }, true), 220);
 });
 el('global-search').addEventListener('keydown', event => { if (event.key === 'Enter' && parseRoute().name === 'home' && event.currentTarget.value.trim()) openCommand(event.currentTarget.value.trim()); });
 el('refresh-data').addEventListener('click', () => loadData(true));
+['home-daily-open', 'curated-daily-open'].forEach(id => el(id).addEventListener('click', openDaily));
+['home-daily-queue', 'curated-daily-queue'].forEach(id => el(id).addEventListener('click', queueDaily));
+['home-daily-done', 'curated-daily-done'].forEach(id => el(id).addEventListener('click', completeDaily));
+['curated-area', 'curated-venue'].forEach(id => el(id).addEventListener('change', () => navigate('curated', { ...parseRoute().query, area: el('curated-area').value, venue: el('curated-venue').value })));
 
 el('library-tabs').addEventListener('click', event => { const button = event.target.closest('[data-tab]'); if (button) navigate(`library/${button.dataset.tab}`); });
 el('library-list').addEventListener('click', event => {
