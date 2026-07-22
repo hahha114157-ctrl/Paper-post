@@ -1,7 +1,7 @@
 {
-  "name": "PaperScope AI 与体系结构研究工作台",
+  "name": "PaperScope 分页研究工作台",
   "short_name": "PaperScope",
-  "description": "聚合 AI 与体系结构论文，并管理收藏、已读、笔记、标注和发表动态",
+  "description": "分页浏览 AI 与体系结构论文，管理阅读队列、笔记、专题和发表动态",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
