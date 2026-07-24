@@ -3,6 +3,9 @@ const V2_STORAGE_KEY = 'paperscope-library-v2';
 const LEGACY_SAVED_KEY = 'paperscope-saved';
 const THEME_KEY = 'paperscope-theme';
 const FILTER_KEY_PREFIX = 'paperscope-quality-filters-v1-';
+const TRANSLATION_SETTINGS_KEY = 'paperscope-translation-settings-v1';
+const TRANSLATION_CACHE_KEY = 'paperscope-translation-cache-v1';
+const TRANSLATION_DEFAULTS = { enabled: true, wordClick: true, selection: true, cache: true };
 const el = id => document.getElementById(id);
 
 const AREA_CONFIG = {
@@ -34,7 +37,8 @@ const ROUTE_NAMES = { home: '概览', ai: 'AI 论文', architecture: '体系结�
 const state = {
   datasets: { ai: null, architecture: null }, news: null, venues: null, curated: null, loaded: false,
   compare: new Set(), batch: new Set(), returnHash: null, selectedPaperId: null,
-  installPrompt: null, searchTimer: null
+  installPrompt: null, searchTimer: null, translator: null, translatorStatus: 'checking',
+  translationRequestId: 0, translationSelectionTimer: null, translationPayload: null, lastSelectionKey: ''
 };
 
 function readJson(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } }
@@ -42,12 +46,12 @@ function defaultLibrary() {
   return {
     version: 3,
     profile: { name: '研究者', focus: 'AI · 计算机体系结构', bio: '建立自己的研究脉络。', createdAt: new Date().toISOString() },
-    records: {}, collections: {}, savedVenues: [], dailyProgress: {}
+    records: {}, collections: {}, savedVenues: [], dailyProgress: {}, vocabulary: {}
   };
 }
 function migrateLibrary() {
   const current = readJson(STORAGE_KEY, null);
-  if (current?.version === 3) return { ...defaultLibrary(), ...current, profile: { ...defaultLibrary().profile, ...(current.profile || {}) }, records: current.records || {}, collections: current.collections || {}, savedVenues: current.savedVenues || [], dailyProgress: current.dailyProgress || {} };
+  if (current?.version === 3) return { ...defaultLibrary(), ...current, profile: { ...defaultLibrary().profile, ...(current.profile || {}) }, records: current.records || {}, collections: current.collections || {}, savedVenues: current.savedVenues || [], dailyProgress: current.dailyProgress || {}, vocabulary: current.vocabulary || {} };
   const old = readJson(V2_STORAGE_KEY, null);
   if (!old?.records) return defaultLibrary();
   const records = Object.fromEntries(Object.entries(old.records).map(([id, record]) => [id, {
@@ -59,6 +63,8 @@ function migrateLibrary() {
   return migrated;
 }
 let library = migrateLibrary();
+let translationSettings = { ...TRANSLATION_DEFAULTS, ...readJson(TRANSLATION_SETTINGS_KEY, {}) };
+let translationCache = readJson(TRANSLATION_CACHE_KEY, {});
 function saveLibrary() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(library)); } catch { toast('浏览器存储空间不足，请导出备份'); } }
 function escapeHtml(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]); }
 function safeUrl(value = '') { try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : '#'; } catch { return '#'; } }
@@ -135,7 +141,7 @@ function syncTopSearch(route) {
 }
 function renderRoute() {
   const route = parseRoute(); if (!ROUTE_NAMES[route.name]) return navigate('home', {}, true);
-  syncTopSearch(route); setActiveNav(route.name);
+  closeTranslationPopover(); syncTopSearch(route); setActiveNav(route.name);
   if (!state.loaded) return;
   if (route.name !== 'paper') { state.returnHash = null; closeDrawer(false); }
   if (route.name === 'home') { showView('home'); renderHome(); }
@@ -185,7 +191,8 @@ function libraryStats() {
   return {
     saved: records.filter(record => record.savedAt).length, queue: records.filter(record => record.queueAt).length,
     read: records.filter(record => record.readAt).length, notes: records.filter(record => record.note || record.highlights?.length).length,
-    published: records.filter(record => record.savedAt && publicationInfo(record, record.paper).status === 'published').length
+    published: records.filter(record => record.savedAt && publicationInfo(record, record.paper).status === 'published').length,
+    terms: Object.keys(library.vocabulary || {}).length
   };
 }
 function renderHome() {
@@ -246,7 +253,7 @@ function renderPaperPage(area, route) {
 }
 function paperRow(paper, index) {
   const record = getRecord(paper.id); const info = publicationInfo(record, paper); const checked = state.compare.has(paper.id);
-  return `<article class="paper-row ${record?.readAt ? 'read' : ''}" data-paper-id="${escapeHtml(paper.id)}"><input class="check" type="checkbox" data-action="compare" aria-label="加入对比" ${checked ? 'checked' : ''}><span class="paper-index">${String(index).padStart(2, '0')}</span><div class="paper-main"><button class="paper-title" data-action="open"><h3>${escapeHtml(paper.title)}</h3></button><p>${escapeHtml(paper.abstract)}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span>${paper.quality?.tier ? `<span class="tag quality-badge">${escapeHtml(paper.quality.tier)} · ${paper.qualityScore}</span>` : ''}<span class="tag venue-badge">${escapeHtml(`${paper.venueName || paper.venue || paper.source}${paper.venueYear ? ` ${paper.venueYear}` : ''}`)}</span><span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.status === 'published' ? '正式收录' : '预印本')}</span><span class="tag">${escapeHtml(paperDateText(paper))}</span>${record?.note ? '<span class="tag note">有笔记</span>' : ''}${paperTopics(paper).map(topic => `<span class="tag">${escapeHtml(topic)}</span>`).join('')}</div></div><div class="paper-actions"><button data-action="read" class="${record?.readAt ? 'active' : ''}" title="已读">✓</button><button data-action="queue" class="${record?.queueAt ? 'active' : ''}" title="阅读队列">＋</button><button data-action="save" class="${record?.savedAt ? 'saved' : ''}" title="收藏">${record?.savedAt ? '★' : '☆'}</button></div></article>`;
+  return `<article class="paper-row ${record?.readAt ? 'read' : ''}" data-paper-id="${escapeHtml(paper.id)}"><input class="check" type="checkbox" data-action="compare" aria-label="加入对比" ${checked ? 'checked' : ''}><span class="paper-index">${String(index).padStart(2, '0')}</span><div class="paper-main"><button class="paper-title" data-action="open"><h3>${escapeHtml(paper.title)}</h3></button><p data-translatable>${escapeHtml(paper.abstract)}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span>${paper.quality?.tier ? `<span class="tag quality-badge">${escapeHtml(paper.quality.tier)} · ${paper.qualityScore}</span>` : ''}<span class="tag venue-badge">${escapeHtml(`${paper.venueName || paper.venue || paper.source}${paper.venueYear ? ` ${paper.venueYear}` : ''}`)}</span><span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.status === 'published' ? '正式收录' : '预印本')}</span><span class="tag">${escapeHtml(paperDateText(paper))}</span>${record?.note ? '<span class="tag note">有笔记</span>' : ''}${paperTopics(paper).map(topic => `<span class="tag">${escapeHtml(topic)}</span>`).join('')}</div></div><div class="paper-actions"><button data-action="read" class="${record?.readAt ? 'active' : ''}" title="已读">✓</button><button data-action="queue" class="${record?.queueAt ? 'active' : ''}" title="阅读队列">＋</button><button data-action="save" class="${record?.savedAt ? 'saved' : ''}" title="收藏">${record?.savedAt ? '★' : '☆'}</button></div></article>`;
 }
 function renderPagination(target, page, total, onPage) {
   const node = el(target); if (total <= 1) { node.innerHTML = ''; return; }
@@ -298,7 +305,9 @@ function renderLibraryPage(route) {
   renderProfile(); const tab = route.parts[1] || 'saved'; const q = route.query.q || ''; const collectionId = route.query.collection || 'all'; const page = Math.max(1, Number(route.query.page || 1));
   const stats = libraryStats(); for (const [name, value] of Object.entries(stats)) el(`stat-${name}`).textContent = value;
   document.querySelectorAll('#library-tabs [data-tab]').forEach(button => button.classList.toggle('active', button.dataset.tab === tab));
+  el('library-batchbar').classList.toggle('hidden', tab === 'vocabulary');
   el('collection-tools').classList.toggle('hidden', tab !== 'collections'); renderCollectionOptions(collectionId);
+  if (tab === 'vocabulary') return renderVocabularyPage(route);
   const records = libraryRecords(tab, collectionId, q); const total = Math.max(1, Math.ceil(records.length / 10)); const safePage = Math.min(page, total); const pageRecords = records.slice((safePage - 1) * 10, safePage * 10);
   state.batch.clear(); updateBatchCount(); el('library-select-all').checked = false;
   el('library-list').innerHTML = pageRecords.length ? pageRecords.map(([id, record]) => libraryRow(id, record)).join('') : '<div class="empty">当前分类还没有论文。</div>';
@@ -306,7 +315,17 @@ function renderLibraryPage(route) {
 }
 function libraryRow(id, record) {
   const info = publicationInfo(record, record.paper); const names = (record.collections || []).map(collectionId => library.collections[collectionId]?.name).filter(Boolean);
-  return `<article class="library-row" data-library-id="${escapeHtml(id)}"><input class="check" type="checkbox" data-library-select aria-label="选择论文"><div><h3>${escapeHtml(record.paper.title)}</h3><p>${escapeHtml(record.note || record.paper.abstract || '')}</p><div class="tag-row"><span class="tag ${record.paper.area === 'architecture' ? 'arch' : ''}">${record.paper.area === 'architecture' ? '体系结构' : 'AI'}</span><span class="tag">进度 ${record.progress || 0}%</span>${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${names.map(name => `<span class="tag"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="paper-actions"><button data-library-action="compare">对比</button><button data-library-action="open">查看</button><button data-library-action="save" class="${record.savedAt ? 'saved' : ''}">${record.savedAt ? '★' : '☆'}</button></div></article>`;
+  return `<article class="library-row" data-library-id="${escapeHtml(id)}"><input class="check" type="checkbox" data-library-select aria-label="选择论文"><div><h3>${escapeHtml(record.paper.title)}</h3><p data-translatable>${escapeHtml(record.note || record.paper.abstract || '')}</p><div class="tag-row"><span class="tag ${record.paper.area === 'architecture' ? 'arch' : ''}">${record.paper.area === 'architecture' ? '体系结构' : 'AI'}</span><span class="tag">进度 ${record.progress || 0}%</span>${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${names.map(name => `<span class="tag"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="paper-actions"><button data-library-action="compare">对比</button><button data-library-action="open">查看</button><button data-library-action="save" class="${record.savedAt ? 'saved' : ''}">${record.savedAt ? '★' : '☆'}</button></div></article>`;
+}
+function renderVocabularyPage(route) {
+  const q = (route.query.q || '').trim().toLowerCase(); const page = Math.max(1, Number(route.query.page || 1));
+  const entries = Object.entries(library.vocabulary || {}).filter(([, item]) => !q || `${item.source} ${item.translation} ${item.context || ''} ${getPaper(item.paperId)?.title || ''}`.toLowerCase().includes(q)).sort(([, a], [, b]) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+  const total = Math.max(1, Math.ceil(entries.length / 12)); const safePage = Math.min(page, total); const pageEntries = entries.slice((safePage - 1) * 12, safePage * 12);
+  el('library-list').innerHTML = pageEntries.length ? pageEntries.map(([id, item]) => {
+    const paper = getPaper(item.paperId); const sourceLabel = paper?.title || item.paperTitle || '未关联论文';
+    return `<article class="vocabulary-row" data-vocabulary-id="${escapeHtml(id)}"><div><h3 data-translatable>${escapeHtml(item.source)}</h3><div class="translation">${escapeHtml(item.translation)}</div><p>${escapeHtml(item.context || '')}</p><div class="tag-row"><span class="tag">${escapeHtml(sourceLabel)}</span><span class="tag">${escapeHtml(dateText(item.updatedAt || item.createdAt))}</span></div></div><div class="paper-actions">${paper ? '<button data-vocabulary-action="open">论文</button>' : ''}<button data-vocabulary-action="copy">复制</button><button data-vocabulary-action="remove" title="删除">×</button></div></article>`;
+  }).join('') : '<div class="empty">生词本还是空的。阅读论文时点击英文单词，再选择“加入生词本”。</div>';
+  renderPagination('library-pagination', safePage, total, next => navigate('library/vocabulary', { ...route.query, page: next }));
 }
 function renderCollectionOptions(selected) {
   const options = Object.entries(library.collections).map(([id, collection]) => `<option value="${escapeHtml(id)}">${escapeHtml(collection.name)}</option>`).join('');
@@ -359,7 +378,7 @@ function openDrawer(id) {
   renderDrawerActions(); renderHighlights(); updateDetailNavigation(); el('drawer-overlay').classList.add('open'); el('paper-drawer').classList.add('open'); document.body.style.overflow = 'hidden';
 }
 function closeDrawer(navigateBack = true) {
-  el('drawer-overlay').classList.remove('open'); el('paper-drawer').classList.remove('open'); document.body.style.overflow = '';
+  closeTranslationPopover(); el('drawer-overlay').classList.remove('open'); el('paper-drawer').classList.remove('open'); document.body.style.overflow = '';
   if (navigateBack && parseRoute().name === 'paper') { const fallback = state.returnHash; state.returnHash = null; if (fallback) location.hash = fallback; else navigate(getPaper(state.selectedPaperId)?.area || 'ai'); }
 }
 function renderDrawerActions() {
@@ -456,6 +475,211 @@ async function loadData(force = false) {
   } catch (error) { toast(error.message || '数据加载失败'); document.querySelectorAll('.paper-list').forEach(node => { node.innerHTML = '<div class="empty">无法加载已发布数据，请稍后刷新。</div>'; }); }
 }
 
+function saveTranslationSettings() {
+  try { localStorage.setItem(TRANSLATION_SETTINGS_KEY, JSON.stringify(translationSettings)); } catch {}
+  applyTranslationSettings();
+}
+function applyTranslationSettings() {
+  document.documentElement.classList.toggle('translation-enabled', translationSettings.enabled);
+  el('translation-open').classList.toggle('active', translationSettings.enabled);
+  el('translation-open').setAttribute('aria-pressed', String(translationSettings.enabled));
+  el('translation-open').title = translationSettings.enabled ? '阅读翻译已开启 · 点击设置' : '阅读翻译已关闭 · 点击设置';
+  el('translation-enabled').checked = translationSettings.enabled;
+  el('translation-word-click').checked = translationSettings.wordClick;
+  el('translation-selection').checked = translationSettings.selection;
+  el('translation-cache').checked = translationSettings.cache;
+  el('translation-word-click').disabled = !translationSettings.enabled;
+  el('translation-selection').disabled = !translationSettings.enabled;
+  el('translation-cache').disabled = !translationSettings.enabled;
+  if (!translationSettings.enabled) closeTranslationPopover();
+  renderTranslationEngineStatus();
+}
+function normalizedTranslationText(text) { return String(text || '').replace(/\s+/g, ' ').trim(); }
+function translationCacheKey(text) { return `en-zh:${normalizedTranslationText(text).toLocaleLowerCase('en-US')}`; }
+function cachedTranslation(text) {
+  if (!translationSettings.cache) return null;
+  const item = translationCache[translationCacheKey(text)];
+  if (!item?.translation) return null;
+  item.usedAt = new Date().toISOString();
+  return item.translation;
+}
+function storeTranslation(text, translation) {
+  if (!translationSettings.cache) return;
+  const now = new Date().toISOString();
+  translationCache[translationCacheKey(text)] = { translation, usedAt: now, createdAt: translationCache[translationCacheKey(text)]?.createdAt || now };
+  translationCache = Object.fromEntries(Object.entries(translationCache).sort(([, a], [, b]) => new Date(b.usedAt) - new Date(a.usedAt)).slice(0, 300));
+  try { localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(translationCache)); } catch {}
+}
+function translationAvailabilityStatus(value) {
+  if (['available', 'readily'].includes(value)) return 'available';
+  if (['downloadable', 'after-download'].includes(value)) return 'downloadable';
+  if (value === 'downloading') return 'downloading';
+  return 'unavailable';
+}
+function renderTranslationEngineStatus(progress) {
+  const title = el('translation-engine-title'); const detail = el('translation-engine-detail'); const prepare = el('translation-prepare');
+  if (!title || !detail || !prepare) return;
+  const labels = {
+    checking: ['正在检查本地翻译能力', '不会下载模型，也不会发送所选文本。'],
+    available: ['本地翻译已就绪', '英译中在浏览器内完成，译文不会上传到 PaperScope。'],
+    downloadable: ['需要下载本地语言包', '首次使用时由浏览器下载；完成后可重复使用。'],
+    downloading: ['正在准备本地语言包', progress === undefined ? '请保持页面打开。' : `下载进度 ${Math.round(progress * 100)}%`],
+    unsupported: ['当前浏览器不支持本地翻译', '仍可复制原文；若要使用翻译，请改用支持 Translator API 的桌面版 Chrome。'],
+    unavailable: ['当前无法使用英译中模型', '浏览器不支持该语言组合，或设备不满足本地模型要求。'],
+    error: ['本地翻译准备失败', state.translatorError || '请稍后重试，或检查浏览器语言包状态。']
+  };
+  const [heading, description] = labels[state.translatorStatus] || labels.checking;
+  title.textContent = heading; detail.textContent = description;
+  prepare.disabled = ['checking', 'downloading', 'unsupported', 'unavailable'].includes(state.translatorStatus) || !translationSettings.enabled;
+  prepare.textContent = state.translatorStatus === 'available' ? '本地翻译已就绪' : state.translatorStatus === 'downloading' ? '正在下载…' : state.translatorStatus === 'error' ? '重新准备' : '准备本地翻译';
+}
+async function detectTranslationCapability() {
+  if (!('Translator' in window) || typeof window.Translator?.availability !== 'function') {
+    state.translatorStatus = 'unsupported'; renderTranslationEngineStatus(); return 'unsupported';
+  }
+  state.translatorStatus = 'checking'; renderTranslationEngineStatus();
+  try {
+    const availability = await window.Translator.availability({ sourceLanguage: 'en', targetLanguage: 'zh' });
+    state.translatorStatus = translationAvailabilityStatus(availability);
+  } catch (error) {
+    state.translatorStatus = 'error'; state.translatorError = error.message;
+  }
+  renderTranslationEngineStatus(); return state.translatorStatus;
+}
+async function prepareTranslator() {
+  if (!translationSettings.enabled) throw new Error('阅读翻译已关闭');
+  if (state.translator) return state.translator;
+  if (!('Translator' in window) || typeof window.Translator?.create !== 'function') {
+    state.translatorStatus = 'unsupported'; renderTranslationEngineStatus(); throw new Error('当前浏览器不支持本地翻译');
+  }
+  state.translatorStatus = 'downloading'; renderTranslationEngineStatus(0);
+  try {
+    state.translator = await window.Translator.create({
+      sourceLanguage: 'en',
+      targetLanguage: 'zh',
+      monitor(monitor) {
+        monitor.addEventListener('downloadprogress', event => renderTranslationEngineStatus(event.loaded));
+      }
+    });
+    state.translatorStatus = 'available'; state.translatorError = ''; renderTranslationEngineStatus(); return state.translator;
+  } catch (error) {
+    state.translatorStatus = 'error'; state.translatorError = error.message; renderTranslationEngineStatus(); throw error;
+  }
+}
+function translationContext(root, text) {
+  const full = normalizedTranslationText(root?.textContent || text); const selected = normalizedTranslationText(text);
+  const index = full.toLocaleLowerCase('en-US').indexOf(selected.toLocaleLowerCase('en-US'));
+  if (index < 0) return full.slice(0, 240);
+  return full.slice(Math.max(0, index - 90), Math.min(full.length, index + selected.length + 110));
+}
+function translationPaperId(root) {
+  const paperRow = root?.closest('[data-paper-id]'); if (paperRow) return paperRow.dataset.paperId;
+  const libraryRowNode = root?.closest('[data-library-id]'); if (libraryRowNode) return libraryRowNode.dataset.libraryId;
+  const vocabularyRow = root?.closest('[data-vocabulary-id]'); if (vocabularyRow) return library.vocabulary?.[vocabularyRow.dataset.vocabularyId]?.paperId || null;
+  return root?.closest('#paper-drawer') ? state.selectedPaperId : null;
+}
+function positionTranslationPopover(rect) {
+  const popover = el('translation-popover'); popover.classList.add('open');
+  if (matchMedia('(max-width:720px)').matches) return;
+  const gap = 9; const width = popover.offsetWidth; const height = popover.offsetHeight;
+  const left = Math.max(12, Math.min(window.innerWidth - width - 12, rect.left + Math.min(rect.width / 2, 90) - width / 2));
+  const below = rect.bottom + gap; const top = below + height <= window.innerHeight - 12 ? below : Math.max(12, rect.top - height - gap);
+  popover.style.left = `${left}px`; popover.style.top = `${top}px`;
+}
+function closeTranslationPopover() {
+  const popover = el('translation-popover'); if (!popover) return;
+  popover.classList.remove('open'); state.translationRequestId += 1; state.translationPayload = null;
+}
+function setTranslationActions(enabled) {
+  el('translation-prepare-inline').classList.add('hidden');
+  el('translation-copy').textContent = enabled ? '复制译文' : '复制原文';
+  el('translation-copy').disabled = !enabled;
+  el('translation-vocabulary').disabled = !enabled;
+  el('translation-note').disabled = !enabled || !state.translationPayload?.paperId;
+}
+async function showTranslation(source, rect, root, sourceType) {
+  source = normalizedTranslationText(source);
+  if (!translationSettings.enabled || !/[A-Za-z]/.test(source)) return;
+  if (source.length > 1000) return toast('单次翻译最多 1,000 个字符');
+  const requestId = ++state.translationRequestId;
+  state.translationPayload = { source, translation: '', context: translationContext(root, source), paperId: translationPaperId(root), sourceType, rect, root };
+  el('translation-original').textContent = source;
+  el('translation-result').textContent = '';
+  el('translation-state').textContent = '正在准备本地翻译…';
+  setTranslationActions(false); positionTranslationPopover(rect);
+  const cached = cachedTranslation(source);
+  if (cached) {
+    state.translationPayload.translation = cached; el('translation-result').textContent = cached; el('translation-state').textContent = '来自本地缓存'; setTranslationActions(true); positionTranslationPopover(rect); return;
+  }
+  if (sourceType === 'selection' && state.translatorStatus === 'downloadable' && !state.translator) {
+    el('translation-state').textContent = '首次使用需要由你确认下载浏览器语言包。';
+    el('translation-prepare-inline').classList.remove('hidden'); el('translation-copy').disabled = false; return;
+  }
+  try {
+    const translator = await prepareTranslator();
+    if (requestId !== state.translationRequestId || !translationSettings.enabled) return;
+    el('translation-state').textContent = '正在翻译…';
+    const result = normalizedTranslationText(await translator.translate(source));
+    if (requestId !== state.translationRequestId || !translationSettings.enabled) return;
+    if (!result) throw new Error('本地翻译未返回内容');
+    state.translationPayload.translation = result; storeTranslation(source, result);
+    el('translation-result').textContent = result; el('translation-state').textContent = '本地翻译 · 未上传文本'; setTranslationActions(true); positionTranslationPopover(rect);
+  } catch (error) {
+    if (requestId !== state.translationRequestId) return;
+    const unavailable = ['unsupported', 'unavailable'].includes(state.translatorStatus);
+    el('translation-state').textContent = unavailable ? '当前浏览器不支持本地翻译，可先复制原文。' : `翻译失败：${error.message || '请稍后重试'}`;
+    el('translation-result').textContent = ''; el('translation-copy').disabled = false; el('translation-vocabulary').disabled = true; el('translation-note').disabled = true;
+    if (!unavailable) el('translation-prepare-inline').classList.remove('hidden');
+    positionTranslationPopover(rect);
+  }
+}
+function translatableSelection() {
+  const selection = window.getSelection(); if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) return null;
+  const range = selection.getRangeAt(0); const start = range.startContainer.nodeType === Node.TEXT_NODE ? range.startContainer.parentElement : range.startContainer;
+  const root = start?.closest?.('[data-translatable]');
+  if (!root || !root.contains(range.endContainer) || root.closest('a,button,input,textarea,select,[contenteditable="true"]')) return null;
+  const text = normalizedTranslationText(selection.toString()); if (!/[A-Za-z]/.test(text)) return null;
+  return { text, root, rect: range.getBoundingClientRect() };
+}
+function wordAtPoint(x, y, root) {
+  let node; let offset;
+  if (document.caretPositionFromPoint) {
+    const position = document.caretPositionFromPoint(x, y); node = position?.offsetNode; offset = position?.offset;
+  } else if (document.caretRangeFromPoint) {
+    const range = document.caretRangeFromPoint(x, y); node = range?.startContainer; offset = range?.startOffset;
+  }
+  if (!node || node.nodeType !== Node.TEXT_NODE || !root.contains(node)) return null;
+  const text = node.data; const isWord = char => /[A-Za-z0-9'-]/.test(char || '');
+  if (!isWord(text[offset]) && isWord(text[offset - 1])) offset -= 1;
+  if (!isWord(text[offset])) return null;
+  let start = offset; let end = offset + 1;
+  while (start > 0 && isWord(text[start - 1])) start -= 1;
+  while (end < text.length && isWord(text[end])) end += 1;
+  while (start < end && /['-]/.test(text[start])) start += 1;
+  while (end > start && /['-]/.test(text[end - 1])) end -= 1;
+  const word = text.slice(start, end); if (!/[A-Za-z]/.test(word)) return null;
+  const range = document.createRange(); range.setStart(node, start); range.setEnd(node, end);
+  return { text: word, rect: range.getBoundingClientRect() };
+}
+function vocabularyId(paperId, source) {
+  let hash = 2166136261;
+  for (const char of `${paperId || 'general'}:${normalizedTranslationText(source).toLowerCase()}`) { hash ^= char.charCodeAt(0); hash = Math.imul(hash, 16777619); }
+  return `term-${(hash >>> 0).toString(36)}`;
+}
+function addCurrentTranslationToVocabulary() {
+  const payload = state.translationPayload; if (!payload?.translation) return;
+  const id = vocabularyId(payload.paperId, payload.source); const previous = library.vocabulary[id];
+  library.vocabulary[id] = { id, source: payload.source, translation: payload.translation, context: payload.context, paperId: payload.paperId || null, paperTitle: getPaper(payload.paperId)?.title || previous?.paperTitle || null, createdAt: previous?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
+  saveLibrary(); toast(previous ? '生词本条目已更新' : '已加入生词本');
+}
+function addCurrentTranslationToNote() {
+  const payload = state.translationPayload; const paper = getPaper(payload?.paperId);
+  if (!payload?.translation || !paper) return toast('这段文字没有关联论文');
+  const record = ensureRecord(paper); const block = `【翻译】\n原文：${payload.source}\n译文：${payload.translation}`;
+  if (!record.note.includes(block)) record.note = `${record.note.trim()}${record.note.trim() ? '\n\n' : ''}${block}`;
+  saveLibrary(); if (payload.paperId === state.selectedPaperId) el('paper-note').value = record.note; toast('译文已加入论文笔记');
+}
+
 document.addEventListener('click', event => {
   const routeButton = event.target.closest('[data-route]'); if (routeButton) return navigate(routeButton.dataset.route);
   const open = event.target.closest('[data-open-paper]'); if (open) return openPaperRoute(open.dataset.openPaper);
@@ -463,6 +687,28 @@ document.addEventListener('click', event => {
   const venueSave = event.target.closest('[data-venue-save]'); if (venueSave) return toggleVenueSave(venueSave.dataset.venueSave);
   const curatedVenue = event.target.closest('[data-curated-venue]'); if (curatedVenue) return navigate('curated', { venue: curatedVenue.dataset.curatedVenue });
   const close = event.target.closest('[data-close-modal]'); if (close) return closeModal(close.dataset.closeModal);
+});
+document.addEventListener('click', event => {
+  if (event.target.closest('#translation-popover')) return;
+  const root = event.target.closest('[data-translatable]');
+  if (!translationSettings.enabled || !translationSettings.wordClick || !root || event.detail > 1 || event.target.closest('a,button,input,textarea,select,label,[contenteditable="true"]')) {
+    if (!root && el('translation-popover').classList.contains('open')) closeTranslationPopover();
+    return;
+  }
+  const selection = window.getSelection(); if (selection && !selection.isCollapsed && normalizedTranslationText(selection.toString())) return;
+  const word = wordAtPoint(event.clientX, event.clientY, root); if (word) showTranslation(word.text, word.rect, root, 'word');
+});
+document.addEventListener('selectionchange', () => {
+  clearTimeout(state.translationSelectionTimer);
+  if (!translationSettings.enabled || !translationSettings.selection) return;
+  state.translationSelectionTimer = setTimeout(() => {
+    const selected = translatableSelection();
+    if (!selected) { state.lastSelectionKey = ''; return; }
+    if (selected.text.length > 1000) return toast('单次翻译最多 1,000 个字符');
+    const key = `${selected.text}:${Math.round(selected.rect.left)}:${Math.round(selected.rect.top)}`;
+    if (key === state.lastSelectionKey) return;
+    state.lastSelectionKey = key; showTranslation(selected.text, selected.rect, selected.root, 'selection');
+  }, 260);
 });
 el('paper-list').addEventListener('click', event => {
   const row = event.target.closest('[data-paper-id]'); if (!row) return; const action = event.target.closest('[data-action]')?.dataset.action;
@@ -485,6 +731,14 @@ el('refresh-data').addEventListener('click', () => loadData(true));
 
 el('library-tabs').addEventListener('click', event => { const button = event.target.closest('[data-tab]'); if (button) navigate(`library/${button.dataset.tab}`); });
 el('library-list').addEventListener('click', event => {
+  const vocabularyRow = event.target.closest('[data-vocabulary-id]');
+  if (vocabularyRow) {
+    const id = vocabularyRow.dataset.vocabularyId; const item = library.vocabulary?.[id]; const action = event.target.closest('[data-vocabulary-action]')?.dataset.vocabularyAction;
+    if (action === 'open' && item?.paperId) openPaperRoute(item.paperId);
+    else if (action === 'copy' && item) copyText(`${item.source}\n${item.translation}`, '词条已复制');
+    else if (action === 'remove') { delete library.vocabulary[id]; saveLibrary(); renderRoute(); toast('词条已删除'); }
+    return;
+  }
   const row = event.target.closest('[data-library-id]'); if (!row) return; const id = row.dataset.libraryId; const action = event.target.closest('[data-library-action]')?.dataset.libraryAction;
   if (action === 'open') openPaperRoute(id); else if (action === 'save') toggleRecordField(id, 'saved'); else if (action === 'compare') toggleCompare(id);
 });
@@ -513,8 +767,24 @@ el('previous-paper').addEventListener('click', () => moveDetail(-1)); el('next-p
 
 el('open-compare').addEventListener('click', renderCompare); el('clear-compare').addEventListener('click', () => { state.compare.clear(); updateCompareTray(); renderCurrentView(); }); el('compare-table').addEventListener('click', event => { const button = event.target.closest('[data-compare-remove]'); if (button) { state.compare.delete(button.dataset.compareRemove); updateCompareTray(); renderCompare(); } });
 el('command-open').addEventListener('click', () => openCommand()); el('command-input').addEventListener('input', event => renderCommands(event.target.value)); el('command-list').addEventListener('click', event => { const route = event.target.closest('[data-command-route]')?.dataset.commandRoute; const paper = event.target.closest('[data-command-paper]')?.dataset.commandPaper; closeModal('command-modal'); if (route) navigate(route); else if (paper) openPaperRoute(paper); });
+el('translation-open').addEventListener('click', () => { applyTranslationSettings(); el('translation-modal').classList.add('open'); detectTranslationCapability(); });
+el('translation-enabled').addEventListener('change', event => { translationSettings.enabled = event.target.checked; saveTranslationSettings(); if (translationSettings.enabled) detectTranslationCapability(); });
+el('translation-word-click').addEventListener('change', event => { translationSettings.wordClick = event.target.checked; saveTranslationSettings(); });
+el('translation-selection').addEventListener('change', event => { translationSettings.selection = event.target.checked; saveTranslationSettings(); });
+el('translation-cache').addEventListener('change', event => { translationSettings.cache = event.target.checked; saveTranslationSettings(); });
+el('translation-prepare').addEventListener('click', async () => { try { await prepareTranslator(); toast('本地英译中已经就绪'); } catch { toast('本地翻译准备失败，请查看状态说明'); } });
+el('translation-prepare-inline').addEventListener('click', async () => {
+  const payload = state.translationPayload; if (!payload) return;
+  try { await prepareTranslator(); showTranslation(payload.source, payload.rect, payload.root, payload.sourceType); } catch { toast('本地翻译准备失败，请查看状态说明'); }
+});
+el('translation-clear-cache').addEventListener('click', () => { translationCache = {}; localStorage.removeItem(TRANSLATION_CACHE_KEY); toast('翻译缓存已清除'); });
+el('translation-open-vocabulary').addEventListener('click', () => { closeModal('translation-modal'); navigate('library/vocabulary'); });
+el('translation-close').addEventListener('click', closeTranslationPopover);
+el('translation-copy').addEventListener('click', () => { const payload = state.translationPayload; copyText(payload?.translation || payload?.source || '', payload?.translation ? '译文已复制' : '原文已复制'); });
+el('translation-vocabulary').addEventListener('click', addCurrentTranslationToVocabulary);
+el('translation-note').addEventListener('click', addCurrentTranslationToNote);
 document.querySelectorAll('.modal').forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) closeModal(modal.id); }));
-document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommand(); } if (event.key === 'Escape') { document.querySelectorAll('.modal.open').forEach(node => node.classList.remove('open')); if (el('paper-drawer').classList.contains('open')) closeDrawer(); } });
+document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommand(); } if (event.key === 'Escape') { closeTranslationPopover(); document.querySelectorAll('.modal.open').forEach(node => node.classList.remove('open')); if (el('paper-drawer').classList.contains('open')) closeDrawer(); } });
 
 el('edit-profile').addEventListener('click', () => el('profile-modal').classList.add('open')); el('save-profile').addEventListener('click', () => { library.profile.name = el('profile-name').value.trim() || '研究者'; library.profile.focus = el('profile-focus').value.trim(); library.profile.bio = el('profile-bio').value.trim(); saveLibrary(); renderProfile(); closeModal('profile-modal'); toast('个人资料已保存'); });
 function applyTheme(theme) { document.documentElement.dataset.theme = theme; localStorage.setItem(THEME_KEY, theme); el('theme-toggle').textContent = theme === 'dark' ? '☀' : '◐'; }
@@ -522,4 +792,4 @@ el('theme-toggle').addEventListener('click', () => applyTheme(document.documentE
 window.addEventListener('scroll', () => el('backtop').classList.toggle('show', window.scrollY > 500)); el('backtop').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
 window.addEventListener('hashchange', renderRoute); window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); state.installPrompt = event; el('install-app').classList.add('show'); }); el('install-app').addEventListener('click', async () => { if (!state.installPrompt) return; state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; el('install-app').classList.remove('show'); }); window.addEventListener('appinstalled', () => toast('PaperScope 已安装'));
 
-applyTheme(localStorage.getItem(THEME_KEY) || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')); renderProfile(); renderCollectionOptions('all'); if (!location.hash.startsWith('#/')) history.replaceState(null, '', '#/home'); if ('serviceWorker' in navigator) navigator.serviceWorker.register('./service-worker.js').catch(() => {}); loadData();
+applyTheme(localStorage.getItem(THEME_KEY) || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')); applyTranslationSettings(); detectTranslationCapability(); renderProfile(); renderCollectionOptions('all'); if (!location.hash.startsWith('#/')) history.replaceState(null, '', '#/home'); if ('serviceWorker' in navigator) navigator.serviceWorker.register('./service-worker.js').catch(() => {}); loadData();
