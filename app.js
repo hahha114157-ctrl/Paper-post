@@ -1,3 +1,4 @@
+const APP_VERSION = '5.2.1';
 const STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
 const LEGACY_SAVED_KEY = 'paperscope-saved';
@@ -38,7 +39,8 @@ const state = {
   datasets: { ai: null, architecture: null }, news: null, venues: null, curated: null, loaded: false,
   compare: new Set(), batch: new Set(), returnHash: null, selectedPaperId: null,
   installPrompt: null, searchTimer: null, translator: null, translatorStatus: 'checking',
-  translationRequestId: 0, translationSelectionTimer: null, translationPayload: null, lastSelectionKey: ''
+  translationRequestId: 0, translationSelectionTimer: null, translationPayload: null, lastSelectionKey: '',
+  serviceWorkerRegistration: null, updateReloading: false
 };
 
 function readJson(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } }
@@ -475,9 +477,40 @@ async function loadData(force = false) {
   } catch (error) { toast(error.message || '数据加载失败'); document.querySelectorAll('.paper-list').forEach(node => { node.innerHTML = '<div class="empty">无法加载已发布数据，请稍后刷新。</div>'; }); }
 }
 
+function showAppUpdate(registration) {
+  state.serviceWorkerRegistration = registration;
+  el('update-banner').classList.add('show');
+}
+async function registerAppServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!state.updateReloading) return;
+    location.reload();
+  });
+  try {
+    const registration = await navigator.serviceWorker.register(`./service-worker.js?v=${APP_VERSION}`);
+    state.serviceWorkerRegistration = registration;
+    if (registration.waiting && navigator.serviceWorker.controller) showAppUpdate(registration);
+    registration.addEventListener('updatefound', () => {
+      const worker = registration.installing; if (!worker) return;
+      worker.addEventListener('statechange', () => {
+        if (worker.state === 'installed' && navigator.serviceWorker.controller) showAppUpdate(registration);
+      });
+    });
+    registration.update().catch(() => {});
+  } catch {}
+}
+
 function saveTranslationSettings() {
   try { localStorage.setItem(TRANSLATION_SETTINGS_KEY, JSON.stringify(translationSettings)); } catch {}
   applyTranslationSettings();
+}
+function openTranslationSettings() {
+  applyTranslationSettings();
+  el('translation-modal').classList.add('open');
+  requestAnimationFrame(() => el('translation-dialog').focus());
+  toast('翻译设置已打开，可准备语言包或调整开关');
+  detectTranslationCapability();
 }
 function applyTranslationSettings() {
   document.documentElement.classList.toggle('translation-enabled', translationSettings.enabled);
@@ -767,7 +800,7 @@ el('previous-paper').addEventListener('click', () => moveDetail(-1)); el('next-p
 
 el('open-compare').addEventListener('click', renderCompare); el('clear-compare').addEventListener('click', () => { state.compare.clear(); updateCompareTray(); renderCurrentView(); }); el('compare-table').addEventListener('click', event => { const button = event.target.closest('[data-compare-remove]'); if (button) { state.compare.delete(button.dataset.compareRemove); updateCompareTray(); renderCompare(); } });
 el('command-open').addEventListener('click', () => openCommand()); el('command-input').addEventListener('input', event => renderCommands(event.target.value)); el('command-list').addEventListener('click', event => { const route = event.target.closest('[data-command-route]')?.dataset.commandRoute; const paper = event.target.closest('[data-command-paper]')?.dataset.commandPaper; closeModal('command-modal'); if (route) navigate(route); else if (paper) openPaperRoute(paper); });
-el('translation-open').addEventListener('click', () => { applyTranslationSettings(); el('translation-modal').classList.add('open'); detectTranslationCapability(); });
+el('translation-open').addEventListener('click', openTranslationSettings);
 el('translation-enabled').addEventListener('change', event => { translationSettings.enabled = event.target.checked; saveTranslationSettings(); if (translationSettings.enabled) detectTranslationCapability(); });
 el('translation-word-click').addEventListener('change', event => { translationSettings.wordClick = event.target.checked; saveTranslationSettings(); });
 el('translation-selection').addEventListener('change', event => { translationSettings.selection = event.target.checked; saveTranslationSettings(); });
@@ -783,6 +816,12 @@ el('translation-close').addEventListener('click', closeTranslationPopover);
 el('translation-copy').addEventListener('click', () => { const payload = state.translationPayload; copyText(payload?.translation || payload?.source || '', payload?.translation ? '译文已复制' : '原文已复制'); });
 el('translation-vocabulary').addEventListener('click', addCurrentTranslationToVocabulary);
 el('translation-note').addEventListener('click', addCurrentTranslationToNote);
+el('update-now').addEventListener('click', () => {
+  const waiting = state.serviceWorkerRegistration?.waiting;
+  if (!waiting) return location.reload();
+  state.updateReloading = true; waiting.postMessage({ type: 'SKIP_WAITING' });
+});
+el('update-later').addEventListener('click', () => el('update-banner').classList.remove('show'));
 document.querySelectorAll('.modal').forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) closeModal(modal.id); }));
 document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommand(); } if (event.key === 'Escape') { closeTranslationPopover(); document.querySelectorAll('.modal.open').forEach(node => node.classList.remove('open')); if (el('paper-drawer').classList.contains('open')) closeDrawer(); } });
 
@@ -792,4 +831,4 @@ el('theme-toggle').addEventListener('click', () => applyTheme(document.documentE
 window.addEventListener('scroll', () => el('backtop').classList.toggle('show', window.scrollY > 500)); el('backtop').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
 window.addEventListener('hashchange', renderRoute); window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); state.installPrompt = event; el('install-app').classList.add('show'); }); el('install-app').addEventListener('click', async () => { if (!state.installPrompt) return; state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; el('install-app').classList.remove('show'); }); window.addEventListener('appinstalled', () => toast('PaperScope 已安装'));
 
-applyTheme(localStorage.getItem(THEME_KEY) || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')); applyTranslationSettings(); detectTranslationCapability(); renderProfile(); renderCollectionOptions('all'); if (!location.hash.startsWith('#/')) history.replaceState(null, '', '#/home'); if ('serviceWorker' in navigator) navigator.serviceWorker.register('./service-worker.js').catch(() => {}); loadData();
+applyTheme(localStorage.getItem(THEME_KEY) || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')); applyTranslationSettings(); detectTranslationCapability(); renderProfile(); renderCollectionOptions('all'); if (!location.hash.startsWith('#/')) history.replaceState(null, '', '#/home'); registerAppServiceWorker(); loadData();

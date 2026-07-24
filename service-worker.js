@@ -1,12 +1,34 @@
-const CACHE = 'paperscope-pages-v7';
-const SHELL = ['./', './app.js', './manifest.webmanifest', './icon.svg'];
-self.addEventListener('install', event => event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting())));
-self.addEventListener('activate', event => event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(key => key !== CACHE).map(key => caches.delete(key)))).then(() => self.clients.claim())));
+const VERSION = '5.2.1';
+const CACHE = `paperscope-pages-v8-${VERSION}`;
+const SHELL = ['./', `./app.js?v=${VERSION}`, './manifest.webmanifest', './icon.svg'];
+
+self.addEventListener('install', event => {
+  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)));
+});
+
+self.addEventListener('message', event => {
+  if (event.data?.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+self.addEventListener('activate', event => {
+  event.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(keys.filter(key => key.startsWith('paperscope-pages-') && key !== CACHE).map(key => caches.delete(key))))
+      .then(() => self.clients.claim())
+  );
+});
+
 self.addEventListener('fetch', event => {
   if (event.request.method !== 'GET') return;
-  const isData = new URL(event.request.url).pathname.includes('/data/');
-  event.respondWith(fetch(event.request, isData ? { cache: 'no-store' } : undefined).then(response => {
-    if (response.ok) { const copy = response.clone(); caches.open(CACHE).then(cache => cache.put(event.request, copy)); }
-    return response;
-  }).catch(() => caches.match(event.request)));
+  const url = new URL(event.request.url);
+  if (url.origin !== self.location.origin) return;
+  const isData = url.pathname.includes('/data/');
+  event.respondWith(
+    fetch(event.request, isData ? { cache: 'no-store' } : undefined)
+      .then(async response => {
+        if (response.ok) await (await caches.open(CACHE)).put(event.request, response.clone());
+        return response;
+      })
+      .catch(() => caches.match(event.request))
+  );
 });
