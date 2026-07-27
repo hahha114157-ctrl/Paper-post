@@ -1,0 +1,17 @@
+name = "paperscope-translation"
+main = "translate-worker.mjs"
+compatibility_date = "2026-07-01"
+
+[vars]
+TRANSLATION_PROVIDER = "deepl"
+ALLOWED_ORIGINS = "https://hahha114157-ctrl.github.io,http://localhost:4173,http://127.0.0.1:4173"
+
+# 可选：DeepL Free 使用默认 api-free.deepl.com。
+# DeepL Pro 可以设置：
+# DEEPL_API_URL = "https://api.deepl.com/v2/translate"
+#
+# LibreTranslate 示例：
+# TRANSLATION_PROVIDER = "libretranslate"
+# LIBRETRANSLATE_URL = "https://your-libretranslate.example"
+#
+# 密钥必须通过 `wrangler secret put` 保存，不要写在此文件中。
