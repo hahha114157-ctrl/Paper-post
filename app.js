@@ -1,4 +1,4 @@
-const APP_VERSION = '6.0.0';
+const APP_VERSION = '6.0.1';
 const STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
 const LEGACY_SAVED_KEY = 'paperscope-saved';
@@ -513,6 +513,9 @@ async function loadData(force = false) {
 }
 
 function showAppUpdate(registration) {
+  const waitingUrl = registration.waiting?.scriptURL || '';
+  const controllerUrl = navigator.serviceWorker.controller?.scriptURL || '';
+  if (!waitingUrl || waitingUrl === controllerUrl) return;
   state.serviceWorkerRegistration = registration;
   el('update-banner').classList.add('show');
 }
