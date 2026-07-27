@@ -14,8 +14,25 @@ PaperScope 是一个面向 AI 与计算机体系结构研究人员的质量优�
 - 基于 arXiv 元数据及 Crossref 标题匹配的正式发表状态跟踪。
 - JSON 导入/导出备份，以及 BibTeX / Markdown 引用导出。
 - 混合阅读翻译：离线多义词典、本地段落翻译和可选在线精译，可将结果加入论文笔记或生词本。
+- 本地 PDF 工作区：可以给目录论文附加 PDF，也可以直接把任意 PDF 作为本地论文加入文献库。
+- 论文与团队追溯：结合本地作者交集、Crossref 和 Semantic Scholar 查看公开机构、作者指标、共同作者与先前工作。
 
-个人数据只保存在当前浏览器的 `localStorage`，不会上传到 GitHub。清理浏览器数据或更换设备前请先导出备份。
+个人数据只保存在当前浏览器。结构化记录位于 `localStorage`，PDF 原文件和逐页文本位于 `IndexedDB`，不会上传到 GitHub。JSON 备份不包含 PDF 二进制文件；清理浏览器数据或更换设备前请分别导出重要 PDF。
+
+## 站内 PDF 阅读
+
+- 论文详情中的“导入 PDF”会解析本地文件、提取逐页文本，并将原文件保存在当前浏览器的 IndexedDB。
+- “站内阅读”提供分页、缩放、全文搜索、页面渲染和可翻译文本；点击单词或框选段落沿用阅读翻译功能。
+- 文献库顶部的“本地 PDF”可以导入目录中不存在的论文，标题和作者优先读取 PDF 元数据。
+- 单文件上限为 150 MB。扫描版 PDF 若没有文本层仍可查看页面，但需要先用本地 OCR 软件生成文本层才能翻译。
+- 网站不会自动镜像受版权保护的全文。开放版本仅提供可核验入口；跨站 PDF 还可能受浏览器 CORS 限制，因此手动下载后导入最稳定。
+
+## 论文与团队追溯
+
+- 有 DOI 时使用 Crossref 核验论文作者机构，并优先通过 ORCID 精确检索先前工作；Semantic Scholar 用于补充作者档案、共同作者和历史论文。
+- 没有外部匹配或接口限流时，使用当前 PaperScope 数据中的作者交集给出本地追溯结果。
+- “机构”是论文或作者档案公开记录，不代表作者当前所在机构；“团队线索”基于共同作者重合，不会自动声称某个实验室或课题组。
+- 追溯结果会保存到当前浏览器，可手动刷新。外部计数和机构信息仍应点击来源页面复核。
 
 ## 阅读翻译
 
@@ -47,6 +64,7 @@ PaperScope 是一个面向 AI 与计算机体系结构研究人员的质量优�
 - arXiv API：AI 栏目使用 `cs.AI`、`cs.LG`、`cs.CL`、`cs.CV`、`cs.RO`；体系结构栏目使用 `cs.AR`、`cs.DC`、`cs.PF`。
 - PMLR、NeurIPS Proceedings、ACL Anthology：ICML、NeurIPS、ACL 正式论文集与权威元数据。
 - Crossref REST API 与出版方 DOI：CVPR、TPAMI、ISCA、MICRO、HPCA、ASPLOS、IEEE TC、ACM TACO 等会议和期刊专栏。
+- Semantic Scholar Academic Graph：论文匹配、作者档案、共同作者和历史工作追溯；公共接口限流时自动回退到本地结果。
 - arXiv 回退：正式出版元数据没有机器可读摘要时，按标准化标题匹配对应 arXiv 版本，并保留正式出版链接。
 - 官方 RSS：OpenAI、Google DeepMind、Microsoft Research。
 - 会议与期刊：官方 CFP / 作者指南链接、人工核验日期和动态截止状态。
@@ -97,6 +115,7 @@ npm run build
 scripts/build-static.mjs     聚合论文、资讯、热点和会议数据
 scripts/preview.mjs          本地静态预览服务
 index.html / app.js          前端页面和交互
+pdfjs-dist                   本地 PDF 页面渲染与文本提取
 manifest.webmanifest         PWA 安装配置
 service-worker.js            静态资源与数据离线缓存
 dist/                        构建产物，不提交到 Git

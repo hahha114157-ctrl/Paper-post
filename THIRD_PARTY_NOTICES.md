@@ -11,3 +11,12 @@ PaperScope 的通用离线英汉词典分片由
 
 PaperScope 仅选取高频、常用及考试词汇并转换为浏览器按需加载的 JSON
 分片；专业 AI 与计算机体系结构术语由 PaperScope 单独维护。
+
+## PDF.js
+
+- Project: Mozilla PDF.js
+- Source: https://github.com/mozilla/pdf.js
+- Version: 6.1.200
+- License: Apache License 2.0
+
+站内 PDF 阅读器打包了 PDF.js 的浏览器显示层、Worker、字符映射、标准字体与 WASM 辅助文件。
