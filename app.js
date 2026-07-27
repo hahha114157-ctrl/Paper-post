@@ -1,4 +1,4 @@
-const APP_VERSION = '6.0.1';
+const APP_VERSION = '6.1.0';
 const STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
 const LEGACY_SAVED_KEY = 'paperscope-saved';
@@ -9,6 +9,8 @@ const LEGACY_TRANSLATION_SETTINGS_KEY = 'paperscope-translation-settings-v1';
 const TRANSLATION_CACHE_KEY = 'paperscope-translation-cache-v2';
 const LEGACY_TRANSLATION_CACHE_KEY = 'paperscope-translation-cache-v1';
 const TRANSLATION_HISTORY_KEY = 'paperscope-translation-history-v1';
+const PDF_DB_NAME = 'paperscope-pdf-library-v1';
+const PDF_STORE_NAME = 'pdfs';
 const TRANSLATION_DEFAULTS = {
   enabled: true, wordClick: true, selection: true, cache: true, mode: 'auto',
   positionMode: 'follow', position: null, onlineEndpoint: ''
@@ -48,6 +50,8 @@ const state = {
   translationRequestId: 0, translationSelectionTimer: null, translationPayload: null, lastSelectionKey: '',
   dictionaryManifest: null, dictionaryDomain: null, dictionaryShards: new Map(), dictionaryDownloadController: null,
   translationDrag: null,
+  pdfModule: null, pdfLoadingTask: null, pdfDocument: null, pdfRecord: null, pdfPaperId: null, pdfPage: 1, pdfScale: 1.15, pdfRenderTask: null,
+  lineageRequestId: 0,
   serviceWorkerRegistration: null, updateReloading: false
 };
 
@@ -124,7 +128,8 @@ function ensureRecord(paper) {
     paper: snapshotPaper(paper), savedAt: old.savedAt || null, queueAt: old.queueAt || null, readAt: old.readAt || null,
     lastOpenedAt: old.lastOpenedAt || null, progress: Number(old.progress || 0), note: old.note || '', tags: Array.isArray(old.tags) ? old.tags : [],
     highlights: Array.isArray(old.highlights) ? old.highlights : [], collections: Array.isArray(old.collections) ? old.collections : [],
-    publication: old.publication || paper.publication || null, abstractTranslation: old.abstractTranslation || null
+    publication: old.publication || paper.publication || null, abstractTranslation: old.abstractTranslation || null,
+    pdfAttachment: old.pdfAttachment || null, lineage: old.lineage || null
   };
   return library.records[paper.id];
 }
@@ -331,7 +336,7 @@ function renderLibraryPage(route) {
 }
 function libraryRow(id, record) {
   const info = publicationInfo(record, record.paper); const names = (record.collections || []).map(collectionId => library.collections[collectionId]?.name).filter(Boolean);
-  return `<article class="library-row" data-library-id="${escapeHtml(id)}"><input class="check" type="checkbox" data-library-select aria-label="选择论文"><div><h3>${escapeHtml(record.paper.title)}</h3><p data-translatable>${escapeHtml(record.note || record.paper.abstract || '')}</p><div class="tag-row"><span class="tag ${record.paper.area === 'architecture' ? 'arch' : ''}">${record.paper.area === 'architecture' ? '体系结构' : 'AI'}</span><span class="tag">进度 ${record.progress || 0}%</span>${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${names.map(name => `<span class="tag"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="paper-actions"><button data-library-action="compare">对比</button><button data-library-action="open">查看</button><button data-library-action="save" class="${record.savedAt ? 'saved' : ''}">${record.savedAt ? '★' : '☆'}</button></div></article>`;
+  return `<article class="library-row" data-library-id="${escapeHtml(id)}"><input class="check" type="checkbox" data-library-select aria-label="选择论文"><div><h3>${escapeHtml(record.paper.title)}</h3><p data-translatable>${escapeHtml(record.note || record.paper.abstract || '')}</p><div class="tag-row"><span class="tag ${record.paper.area === 'architecture' ? 'arch' : ''}">${record.paper.area === 'architecture' ? '体系结构' : 'AI'}</span><span class="tag">进度 ${record.progress || 0}%</span>${record.pdfAttachment ? `<span class="tag published">本地 PDF · ${record.pdfAttachment.pageCount} 页</span>` : ''}${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${names.map(name => `<span class="tag"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="paper-actions">${record.pdfAttachment ? '<button data-library-action="pdf">阅读 PDF</button>' : ''}<button data-library-action="compare">对比</button><button data-library-action="open">查看</button><button data-library-action="save" class="${record.savedAt ? 'saved' : ''}">${record.savedAt ? '★' : '☆'}</button></div></article>`;
 }
 function renderVocabularyPage(route) {
   const q = (route.query.q || '').trim().toLowerCase(); const page = Math.max(1, Number(route.query.page || 1));
@@ -402,7 +407,7 @@ function openDrawer(id) {
   const paper = getPaper(id); if (!paper) return; state.selectedPaperId = id; markOpened(id); const record = ensureRecord(paper); const summary = summarizePaper(paper);
   el('detail-title').textContent = paper.title; el('detail-meta').textContent = `${(paper.authors || []).slice(0, 8).join(', ') || '作者信息缺失'} · ${paperDateText(paper)} · ${paper.venueName || paper.venue || paper.source}${paper.track ? ` · ${paper.track}` : ''}`;
   el('detail-summary').textContent = summary.oneLine; el('detail-points').innerHTML = summary.points.map(point => `<li>${escapeHtml(point)}</li>`).join(''); el('detail-limitation').textContent = summary.limitation;
-  el('detail-link').href = safeUrl(paper.link); el('paper-note').value = record.note || ''; el('paper-tags').value = (record.tags || []).join(', '); el('reading-progress').value = String(record.progress || 0); renderCollectionOptions();
+  el('detail-link').href = safeUrl(paper.link); el('detail-link').classList.toggle('hidden', paper.kind === 'local' || !paper.link); el('paper-note').value = record.note || ''; el('paper-tags').value = (record.tags || []).join(', '); el('reading-progress').value = String(record.progress || 0); renderCollectionOptions();
   el('detail-bilingual-panel').classList.toggle('hidden', !record.abstractTranslation?.text);
   el('detail-bilingual-text').textContent = record.abstractTranslation?.text || '';
   el('detail-bilingual-source').textContent = record.abstractTranslation?.provider ? `中文摘要 · ${record.abstractTranslation.provider}` : '中文摘要';
@@ -412,7 +417,7 @@ function openDrawer(id) {
   el('detail-quality-reason').textContent = paper.quality?.reasons?.length ? `推荐依据：${paper.quality.reasons.join('；')} · 推荐分 ${paper.qualityScore}` : '当前未获得旗舰会议/期刊质量标记，请结合原文自行判断。';
   const official = paper.officialUrl || info.url || (paper.doi ? `https://doi.org/${paper.doi}` : null); el('detail-official-link').href = official ? safeUrl(official) : '#'; el('detail-official-link').classList.toggle('hidden', !official);
   const arxiv = paper.arxivUrl || (paper.source === 'arXiv' ? paper.link : null); el('detail-arxiv-link').href = arxiv ? safeUrl(arxiv) : '#'; el('detail-arxiv-link').classList.toggle('hidden', !arxiv);
-  renderDrawerActions(); renderHighlights(); updateDetailNavigation(); el('drawer-overlay').classList.add('open'); el('paper-drawer').classList.add('open'); document.body.style.overflow = 'hidden';
+  renderDrawerActions(); renderHighlights(); renderPdfAttachmentStatus(record); renderLineagePanel(record); el('detail-lineage').textContent = record.lineage ? '刷新追溯' : '查询追溯'; updateDetailNavigation(); el('drawer-overlay').classList.add('open'); el('paper-drawer').classList.add('open'); document.body.style.overflow = 'hidden';
 }
 function closeDrawer(navigateBack = true) {
   closeTranslationPopover(); el('drawer-overlay').classList.remove('open'); el('paper-drawer').classList.remove('open'); document.body.style.overflow = '';
@@ -465,6 +470,378 @@ async function importLibraryFile(file) {
   try { const value = JSON.parse(await file.text()); if (![2, 3].includes(value.version) || !value.records) throw new Error('不是有效的 PaperScope 备份'); if (!confirm(`将导入 ${Object.keys(value.records).length} 条记录并覆盖当前文献库，是否继续？`)) return; localStorage.setItem(value.version === 3 ? STORAGE_KEY : V2_STORAGE_KEY, JSON.stringify(value)); library = migrateLibrary(); saveLibrary(); renderRoute(); toast('导入完成'); } catch (error) { toast(error.message || '导入失败'); }
 }
 
+function openPdfDb() {
+  return new Promise((resolve, reject) => {
+    const request = indexedDB.open(PDF_DB_NAME, 1);
+    request.onupgradeneeded = () => {
+      if (!request.result.objectStoreNames.contains(PDF_STORE_NAME)) request.result.createObjectStore(PDF_STORE_NAME, { keyPath: 'paperId' });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('无法打开本地 PDF 数据库'));
+  });
+}
+async function pdfStoreOperation(mode, operation) {
+  const db = await openPdfDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const transaction = db.transaction(PDF_STORE_NAME, mode);
+      const store = transaction.objectStore(PDF_STORE_NAME);
+      const request = operation(store);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error || new Error('本地 PDF 存储失败'));
+      transaction.onabort = () => reject(transaction.error || new Error('本地 PDF 事务已中止'));
+    });
+  } finally { db.close(); }
+}
+const getStoredPdf = paperId => pdfStoreOperation('readonly', store => store.get(paperId));
+const putStoredPdf = value => pdfStoreOperation('readwrite', store => store.put(value));
+const deleteStoredPdf = paperId => pdfStoreOperation('readwrite', store => store.delete(paperId));
+
+async function loadPdfModule() {
+  if (state.pdfModule) return state.pdfModule;
+  const module = await import(`./vendor/pdfjs/pdf.mjs?v=${APP_VERSION}`);
+  module.GlobalWorkerOptions.workerSrc = new URL(`./vendor/pdfjs/pdf.worker.mjs?v=${APP_VERSION}`, location.href).href;
+  state.pdfModule = module;
+  return module;
+}
+function pdfDocumentOptions(data) {
+  return {
+    data,
+    cMapUrl: new URL('./vendor/pdfjs/cmaps/', location.href).href,
+    cMapPacked: true,
+    standardFontDataUrl: new URL('./vendor/pdfjs/standard_fonts/', location.href).href,
+    wasmUrl: new URL('./vendor/pdfjs/wasm/', location.href).href
+  };
+}
+function pdfPageText(content) {
+  let text = '';
+  for (const item of content.items || []) {
+    if (!('str' in item)) continue;
+    text += `${item.str}${item.hasEOL ? '\n' : ' '}`;
+  }
+  return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
+}
+function setPdfProgress(value, label) {
+  if (el('pdf-progress')) el('pdf-progress').style.width = `${Math.max(0, Math.min(100, value))}%`;
+  if (label && el('pdf-status')) el('pdf-status').textContent = label;
+}
+async function parseAndStorePdf(file, paperId) {
+  if (!file || (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf')) throw new Error('请选择 PDF 文件');
+  if (file.size > 150 * 1024 * 1024) throw new Error('单个 PDF 不能超过 150 MB');
+  const header = new TextDecoder('latin1').decode(await file.slice(0, 5).arrayBuffer());
+  if (header !== '%PDF-') throw new Error('文件头不是有效的 PDF');
+  const pdfjs = await loadPdfModule();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const loadingTask = pdfjs.getDocument(pdfDocumentOptions(bytes));
+  const pdf = await loadingTask.promise;
+  const metadata = await pdf.getMetadata().catch(() => ({ info: {} }));
+  const pages = [];
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    setPdfProgress(pageNumber / pdf.numPages * 100, `正在提取第 ${pageNumber}/${pdf.numPages} 页`);
+    if (paperId === state.selectedPaperId) el('detail-pdf-status').textContent = `正在提取第 ${pageNumber}/${pdf.numPages} 页`;
+    const page = await pdf.getPage(pageNumber);
+    pages.push(pdfPageText(await page.getTextContent()));
+    page.cleanup();
+  }
+  const result = {
+    paperId,
+    fileName: file.name,
+    size: file.size,
+    type: 'application/pdf',
+    pageCount: pdf.numPages,
+    pages,
+    metadata: { title: metadata.info?.Title || '', author: metadata.info?.Author || '', subject: metadata.info?.Subject || '' },
+    importedAt: new Date().toISOString(),
+    blob: file.slice(0, file.size, 'application/pdf')
+  };
+  await loadingTask.destroy();
+  await putStoredPdf(result);
+  navigator.storage?.persist?.().catch(() => {});
+  return result;
+}
+function pdfAttachmentMeta(stored, previous = {}) {
+  return {
+    fileName: stored.fileName,
+    size: stored.size,
+    pageCount: stored.pageCount,
+    importedAt: stored.importedAt,
+    textPages: stored.pages.filter(Boolean).length,
+    lastPage: Number(previous.lastPage || 1)
+  };
+}
+function renderPdfAttachmentStatus(record) {
+  const meta = record?.pdfAttachment;
+  el('detail-pdf-status').textContent = meta ? `${meta.fileName} · ${meta.pageCount} 页 · ${meta.textPages} 页有文本` : '尚未导入 PDF';
+  el('detail-pdf-import').textContent = meta ? '替换 PDF' : '导入 PDF';
+  for (const id of ['detail-pdf-open', 'detail-pdf-download', 'detail-pdf-remove']) el(id).classList.toggle('hidden', !meta);
+}
+async function attachPdfToPaper(file, paperId) {
+  const paper = getPaper(paperId); if (!paper) return;
+  const button = el('detail-pdf-import'); button.disabled = true; button.textContent = '正在解析…';
+  try {
+    const stored = await parseAndStorePdf(file, paperId);
+    const record = ensureRecord(paper);
+    record.pdfAttachment = pdfAttachmentMeta(stored, record.pdfAttachment || {});
+    record.savedAt ||= new Date().toISOString();
+    saveLibrary(); renderPdfAttachmentStatus(record);
+    toast(`PDF 已导入：${stored.pageCount} 页，${record.pdfAttachment.textPages} 页可翻译`);
+    await openPdfReader(paperId);
+  } catch (error) { toast(error.message || 'PDF 导入失败'); }
+  finally { button.disabled = false; renderPdfAttachmentStatus(getRecord(paperId)); }
+}
+async function importStandalonePdf(file) {
+  const id = `local:${crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)}`;
+  try {
+    toast('正在解析本地 PDF…');
+    const stored = await parseAndStorePdf(file, id);
+    const title = stored.metadata.title.trim() || file.name.replace(/\.pdf$/i, '');
+    const authors = stored.metadata.author.split(/\s*(?:;|,| and )\s*/i).map(value => value.trim()).filter(Boolean);
+    const excerpt = stored.pages.find(Boolean)?.replace(/\s+/g, ' ').slice(0, 1500) || '';
+    const paper = {
+      id, title, abstract: excerpt, authors, published: file.lastModified ? new Date(file.lastModified).toISOString() : new Date().toISOString(),
+      venue: '本地 PDF', venueName: '本地 PDF', source: '本地导入', kind: 'local', area: 'ai', link: '', citationCount: 0, qualityScore: 0
+    };
+    const record = ensureRecord(paper);
+    record.savedAt = new Date().toISOString();
+    record.lastOpenedAt = record.savedAt;
+    record.pdfAttachment = pdfAttachmentMeta(stored);
+    saveLibrary(); navigate('library/saved'); openPaperRoute(id);
+    toast('本地论文已加入文献库');
+  } catch (error) {
+    await deleteStoredPdf(id).catch(() => {});
+    toast(error.message || '本地 PDF 导入失败');
+  }
+}
+async function openPdfReader(paperId) {
+  try {
+    const stored = await getStoredPdf(paperId);
+    if (!stored?.blob) throw new Error('本地 PDF 文件不存在，可能已被浏览器清理');
+    if (state.pdfLoadingTask) await state.pdfLoadingTask.destroy().catch(() => {});
+    const pdfjs = await loadPdfModule();
+    state.pdfLoadingTask = pdfjs.getDocument(pdfDocumentOptions(new Uint8Array(await stored.blob.arrayBuffer())));
+    state.pdfDocument = await state.pdfLoadingTask.promise;
+    state.pdfRecord = stored; state.pdfPaperId = paperId;
+    state.pdfPage = Math.max(1, Math.min(stored.pageCount, Number(getRecord(paperId)?.pdfAttachment?.lastPage || 1)));
+    state.pdfScale = Number(el('pdf-zoom').value || 1.15);
+    el('pdf-title').textContent = getPaper(paperId)?.title || stored.fileName;
+    el('pdf-meta').textContent = `${stored.fileName} · ${(stored.size / 1024 / 1024).toFixed(1)} MB · 本机存储`;
+    el('pdf-search-input').value = ''; el('pdf-search-results').classList.add('hidden'); el('pdf-search-results').innerHTML = '';
+    el('pdf-modal').classList.add('open');
+    await renderPdfPage();
+  } catch (error) { toast(error.message || '无法打开 PDF'); }
+}
+async function renderPdfPage() {
+  if (!state.pdfDocument || !state.pdfRecord) return;
+  const pageNumber = Math.max(1, Math.min(state.pdfDocument.numPages, state.pdfPage));
+  state.pdfPage = pageNumber; setPdfProgress(20, `正在渲染第 ${pageNumber} 页`);
+  if (state.pdfRenderTask) state.pdfRenderTask.cancel();
+  const page = await state.pdfDocument.getPage(pageNumber);
+  const viewport = page.getViewport({ scale: state.pdfScale });
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  const canvas = el('pdf-canvas'); const context = canvas.getContext('2d', { alpha: false });
+  canvas.width = Math.floor(viewport.width * ratio); canvas.height = Math.floor(viewport.height * ratio);
+  canvas.style.width = `${Math.floor(viewport.width)}px`; canvas.style.height = `${Math.floor(viewport.height)}px`;
+  state.pdfRenderTask = page.render({ canvasContext: context, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null });
+  await state.pdfRenderTask.promise;
+  state.pdfRenderTask = null; page.cleanup();
+  const text = state.pdfRecord.pages[pageNumber - 1] || '';
+  el('pdf-page-text').textContent = text || '这一页没有可提取的文本。若它是扫描图片，请先使用本地 OCR 软件生成带文本层的 PDF。';
+  el('pdf-page-text').classList.toggle('empty', !text);
+  el('pdf-page-label').textContent = `${pageNumber} / ${state.pdfDocument.numPages}`;
+  el('pdf-prev').disabled = pageNumber <= 1; el('pdf-next').disabled = pageNumber >= state.pdfDocument.numPages;
+  const attachment = getRecord(state.pdfPaperId)?.pdfAttachment;
+  if (attachment) { attachment.lastPage = pageNumber; saveLibrary(); }
+  setPdfProgress(100, text ? `第 ${pageNumber} 页 · 可点击或框选翻译` : `第 ${pageNumber} 页 · 未检测到文本层`);
+}
+function closePdfReader() {
+  state.pdfRenderTask?.cancel(); state.pdfRenderTask = null;
+  state.pdfLoadingTask?.destroy().catch(() => {});
+  state.pdfLoadingTask = null; state.pdfDocument = null; state.pdfRecord = null; state.pdfPaperId = null;
+}
+function searchPdfText() {
+  const query = el('pdf-search-input').value.trim().toLowerCase();
+  const container = el('pdf-search-results');
+  if (!query) { container.classList.add('hidden'); container.innerHTML = ''; return; }
+  const matches = (state.pdfRecord?.pages || []).map((text, index) => ({ text, page: index + 1, position: text.toLowerCase().indexOf(query) })).filter(item => item.position >= 0).slice(0, 40);
+  container.innerHTML = matches.length ? matches.map(item => {
+    const start = Math.max(0, item.position - 60); const excerpt = item.text.slice(start, item.position + query.length + 100).replace(/\s+/g, ' ');
+    return `<button data-pdf-page="${item.page}"><b>第 ${item.page} 页</b><br>${escapeHtml(excerpt)}</button>`;
+  }).join('') : '<div class="panel-note">全文中没有找到该关键词。</div>';
+  container.classList.remove('hidden');
+}
+async function removeAttachedPdf(paperId) {
+  if (!confirm('移除本机保存的 PDF？收藏、笔记和论文元数据会保留。')) return;
+  await deleteStoredPdf(paperId);
+  const record = getRecord(paperId); if (record) record.pdfAttachment = null;
+  saveLibrary(); renderPdfAttachmentStatus(record); toast('本地 PDF 已移除');
+}
+async function downloadAttachedPdf(paperId) {
+  const stored = await getStoredPdf(paperId); if (!stored?.blob) return toast('本地 PDF 文件不存在');
+  const url = URL.createObjectURL(stored.blob); const link = document.createElement('a'); link.href = url; link.download = stored.fileName; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function normalizedAuthor(name = '') { return name.normalize('NFKD').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim(); }
+function localLineageWorks(paper) {
+  const authors = new Set((paper.authors || []).map(normalizedAuthor).filter(Boolean));
+  const selectedYear = Number(String(paper.published || '').slice(0, 4)) || new Date().getFullYear();
+  return allPapers().filter(item => item.id !== paper.id).map(item => {
+    const overlap = (item.authors || []).filter(name => authors.has(normalizedAuthor(name)));
+    return { id: item.id, title: item.title, year: Number(String(item.published || '').slice(0, 4)) || null, venue: item.venueName || item.venue || item.source, url: safeUrl(item.link), citationCount: Number(item.citationCount || 0), sharedAuthors: overlap, support: overlap.length, source: 'PaperScope 本地语料' };
+  }).filter(item => item.support && (!item.year || item.year <= selectedYear)).sort((a, b) => b.support - a.support || b.citationCount - a.citationCount).slice(0, 12);
+}
+async function fetchJson(url, timeout = 15000) {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await fetch(url, { headers: { Accept: 'application/json' }, signal: AbortSignal.timeout(timeout) });
+    if (response.ok) return response.json();
+    if (![429, 503].includes(response.status) || attempt === 1) throw new Error(`HTTP ${response.status}`);
+    const retryAfter = Number(response.headers.get('retry-after') || 1);
+    await new Promise(resolve => setTimeout(resolve, Math.min(3500, Math.max(900, retryAfter * 1000))));
+  }
+  throw new Error('请求失败');
+}
+function semanticScholarPaperId(paper) {
+  if (paper.doi) return `DOI:${paper.doi}`;
+  if (paper.arxivId) return `ARXIV:${paper.arxivId.replace(/v\d+$/, '')}`;
+  return null;
+}
+async function crossrefAffiliations(paper) {
+  if (!paper.doi) return [];
+  try {
+    const data = await fetchJson(`https://api.crossref.org/works/${encodeURIComponent(paper.doi)}`);
+    return [...new Set((data.message?.author || []).flatMap(author => (author.affiliation || []).map(item => item.name)).filter(Boolean))];
+  } catch { return []; }
+}
+async function crossrefPriorWorks(paper) {
+  const authors = (paper.authors || []).filter(Boolean);
+  if (!authors.length) return [];
+  const selectedNames = [...new Set([authors[0], authors[1], authors[authors.length - 1]].filter(Boolean))];
+  const currentAuthors = new Map(authors.map(name => [normalizedAuthor(name), name]));
+  const selectedYear = Number(String(paper.published || '').slice(0, 4)) || new Date().getFullYear();
+  const orcidByAuthor = new Map();
+  if (paper.doi) {
+    try {
+      const current = await fetchJson(`https://api.crossref.org/works/${encodeURIComponent(paper.doi)}`);
+      for (const author of current.message?.author || []) {
+        const name = `${author.given || ''} ${author.family || ''}`.trim();
+        const orcid = String(author.ORCID || '').split('/').pop();
+        if (name && orcid) orcidByAuthor.set(normalizedAuthor(name), orcid);
+      }
+    } catch {}
+  }
+  const results = [];
+  for (const authorName of selectedNames) {
+    try {
+      const url = new URL('https://api.crossref.org/works');
+      const orcid = orcidByAuthor.get(normalizedAuthor(authorName));
+      if (orcid) {
+        url.searchParams.set('filter', `orcid:${orcid},until-pub-date:${selectedYear}-12-31`);
+        url.searchParams.set('sort', 'published');
+        url.searchParams.set('order', 'desc');
+      } else {
+        url.searchParams.set('query.author', authorName);
+        url.searchParams.set('filter', `until-pub-date:${selectedYear}-12-31`);
+      }
+      url.searchParams.set('rows', '30');
+      url.searchParams.set('select', 'DOI,title,author,published,published-online,container-title,URL,is-referenced-by-count,type');
+      const data = await fetchJson(url);
+      for (const item of data.message?.items || []) {
+        const title = item.title?.[0] || ''; const doi = item.DOI || '';
+        if (!title || doi.toLowerCase() === String(paper.doi || '').toLowerCase() || titleSimilarity(title, paper.title) > .9) continue;
+        const itemAuthors = (item.author || []).map(author => `${author.given || ''} ${author.family || ''}`.trim()).filter(Boolean);
+        const sharedAuthors = itemAuthors.map(name => currentAuthors.get(normalizedAuthor(name))).filter(Boolean);
+        if (!sharedAuthors.length || !sharedAuthors.some(name => normalizedAuthor(name) === normalizedAuthor(authorName))) continue;
+        const parts = item.published?.['date-parts']?.[0] || item['published-online']?.['date-parts']?.[0] || [];
+        results.push({
+          id: doi || `${title}:${parts[0] || ''}`, title, year: parts[0] || null,
+          venue: item['container-title']?.[0] || item.type || 'Crossref',
+          url: item.URL || (doi ? `https://doi.org/${doi}` : '#'),
+          citationCount: Number(item['is-referenced-by-count'] || 0),
+          sharedAuthors: [...new Set(sharedAuthors)], support: new Set(sharedAuthors).size, source: orcid ? 'Crossref · ORCID' : 'Crossref 作者检索'
+        });
+      }
+    } catch {}
+    await new Promise(resolve => setTimeout(resolve, 350));
+  }
+  return results.sort((a, b) => b.support - a.support || b.citationCount - a.citationCount).slice(0, 15);
+}
+async function semanticScholarPaper(paper) {
+  const fields = 'title,year,citationCount,authors,openAccessPdf,externalIds,url';
+  const id = semanticScholarPaperId(paper);
+  if (id) return fetchJson(`https://api.semanticscholar.org/graph/v1/paper/${encodeURIComponent(id)}?fields=${encodeURIComponent(fields)}`);
+  const result = await fetchJson(`https://api.semanticscholar.org/graph/v1/paper/search?query=${encodeURIComponent(paper.title)}&limit=3&fields=${encodeURIComponent(fields)}`);
+  return (result.data || []).map(item => ({ item, score: titleSimilarity(paper.title, item.title || '') })).sort((a, b) => b.score - a.score)[0]?.score >= .78 ? (result.data || []).map(item => ({ item, score: titleSimilarity(paper.title, item.title || '') })).sort((a, b) => b.score - a.score)[0].item : null;
+}
+async function semanticScholarAuthor(authorId) {
+  const fields = 'name,affiliations,paperCount,citationCount,hIndex,papers.title,papers.year,papers.venue,papers.url,papers.citationCount,papers.externalIds';
+  return fetchJson(`https://api.semanticscholar.org/graph/v1/author/${encodeURIComponent(authorId)}?fields=${encodeURIComponent(fields)}`);
+}
+function mergeLineageWorks(profiles, currentPaperId, selectedYear) {
+  const merged = new Map();
+  for (const profile of profiles) for (const work of profile.papers || []) {
+    if (!work.paperId || work.paperId === currentPaperId || (work.year && work.year > selectedYear)) continue;
+    const item = merged.get(work.paperId) || { id: work.paperId, title: work.title, year: work.year, venue: work.venue, url: work.url, citationCount: Number(work.citationCount || 0), sharedAuthors: [], support: 0, source: 'Semantic Scholar' };
+    item.support += 1; item.sharedAuthors.push(profile.name); item.citationCount = Math.max(item.citationCount, Number(work.citationCount || 0)); merged.set(work.paperId, item);
+  }
+  return [...merged.values()].sort((a, b) => b.support - a.support || b.citationCount - a.citationCount || (b.year || 0) - (a.year || 0)).slice(0, 15);
+}
+function renderLineagePanel(record) {
+  const data = record?.lineage;
+  el('lineage-body').classList.toggle('hidden', !data);
+  if (!data) return;
+  el('lineage-status').innerHTML = `${escapeHtml(data.sourceLabel || '本地作者交集')}${data.checkedAt ? ` · 更新 ${escapeHtml(dateText(data.checkedAt, true))}` : ''}${data.openAccess?.url ? ` · <a href="${escapeHtml(safeUrl(data.openAccess.url))}" target="_blank" rel="noopener">开放版本 ↗</a>` : ''}`;
+  el('lineage-summary').innerHTML = `<div class="lineage-metric"><span>可核验作者</span><b>${data.authors?.length || 0}</b></div><div class="lineage-metric"><span>机构线索</span><b>${data.institutions?.length || 0}</b></div><div class="lineage-metric"><span>历史工作</span><b>${data.works?.length || 0}</b></div>`;
+  el('lineage-institutions').innerHTML = data.institutions?.length ? data.institutions.map(name => `<span class="tag">${escapeHtml(name)}</span>`).join('') : '<span class="panel-note">公开元数据未提供机构；这不代表作者没有机构归属。</span>';
+  el('lineage-authors').innerHTML = (data.authors || []).map(author => `<div class="lineage-author"><b>${escapeHtml(author.name)}</b><span>${author.role ? `${escapeHtml(author.role)} · ` : ''}${author.paperCount != null ? `${author.paperCount} 篇 · h ${author.hIndex ?? '—'}` : '本地作者信息'}</span></div>`).join('');
+  el('lineage-works').innerHTML = data.works?.length ? data.works.map(work => `<article class="lineage-work"><div><a href="${escapeHtml(safeUrl(work.url))}" target="_blank" rel="noopener">${escapeHtml(work.title)}</a><p>${escapeHtml(work.year || '年份未知')} · ${escapeHtml(work.venue || '来源未知')} · ${work.support >= 2 ? `${work.support} 位当前作者共同参与` : `共同作者：${escapeHtml((work.sharedAuthors || []).slice(0, 3).join('、') || '1 位')}`} · 被引 ${Number(work.citationCount || 0)}</p></div><span class="tag">${escapeHtml(work.source)}</span></article>`).join('') : '<div class="panel-note">暂未找到可核验的先前工作。</div>';
+}
+async function loadPaperLineage(paperId) {
+  const paper = getPaper(paperId); const record = ensureRecord(paper); if (!paper || !record) return;
+  const requestId = ++state.lineageRequestId; const button = el('detail-lineage');
+  el('lineage-body').classList.remove('hidden'); el('lineage-status').textContent = '正在匹配论文、作者、机构和先前工作…'; button.disabled = true; button.textContent = '查询中…';
+  const localWorks = localLineageWorks(paper);
+  try {
+    const [s2Result, crossrefInstitutions, crossrefWorksResult] = await Promise.allSettled([semanticScholarPaper(paper), crossrefAffiliations(paper), crossrefPriorWorks(paper)]);
+    if (requestId !== state.lineageRequestId) return;
+    const s2Paper = s2Result.status === 'fulfilled' ? s2Result.value : null;
+    const candidates = (s2Paper?.authors || []).filter(author => author.authorId);
+    const sampled = candidates.length <= 2 ? candidates : [candidates[0], candidates[candidates.length - 1]].filter(Boolean);
+    const profiles = [];
+    for (const author of sampled) {
+      try { profiles.push(await semanticScholarAuthor(author.authorId)); } catch {}
+      await new Promise(resolve => setTimeout(resolve, 950));
+    }
+    if (requestId !== state.lineageRequestId) return;
+    const selectedYear = Number(String(paper.published || '').slice(0, 4)) || new Date().getFullYear();
+    const remoteWorks = mergeLineageWorks(profiles, s2Paper?.paperId, selectedYear);
+    const crossrefWorks = crossrefWorksResult.status === 'fulfilled' ? crossrefWorksResult.value : [];
+    const works = [...remoteWorks, ...crossrefWorks, ...localWorks].filter((item, index, items) => items.findIndex(other => normalizedAuthor(other.title) === normalizedAuthor(item.title)) === index).slice(0, 15);
+    const institutions = [...new Set([...(crossrefInstitutions.status === 'fulfilled' ? crossrefInstitutions.value : []), ...profiles.flatMap(profile => profile.affiliations || [])])];
+    const firstId = candidates[0]?.authorId; const lastId = candidates[candidates.length - 1]?.authorId;
+    const authorRows = profiles.length ? profiles : (paper.authors || []).slice(0, 8).map(name => ({ name }));
+    const authors = authorRows.map((profile, index, items) => ({
+      name: profile.name, paperCount: profile.paperCount, citationCount: profile.citationCount, hIndex: profile.hIndex,
+      role: profiles.length && profile.authorId === firstId ? '第一作者线索' : profiles.length && profile.authorId === lastId ? '末位作者线索' : !profiles.length && index === 0 ? '第一作者线索' : !profiles.length && index === items.length - 1 ? '末位作者线索' : '共同作者线索'
+    }));
+    record.lineage = {
+      checkedAt: new Date().toISOString(),
+      sourceLabel: s2Paper ? 'Semantic Scholar + Crossref + 本地作者交集' : 'Crossref + 本地作者交集',
+      matchTitle: s2Paper?.title || null,
+      institutions,
+      authors,
+      works,
+      openAccess: s2Paper?.openAccessPdf?.url ? { url: s2Paper.openAccessPdf.url, status: s2Paper.openAccessPdf.status, license: s2Paper.openAccessPdf.license } : null
+    };
+    saveLibrary(); renderLineagePanel(record); toast(`已找到 ${works.length} 篇历史工作`);
+  } catch (error) {
+    record.lineage = {
+      checkedAt: new Date().toISOString(), sourceLabel: 'PaperScope 本地作者交集',
+      institutions: [], authors: (paper.authors || []).slice(0, 8).map((name, index, items) => ({ name, role: index === 0 ? '第一作者线索' : index === items.length - 1 ? '末位作者线索' : '共同作者线索' })),
+      works: localWorks
+    };
+    saveLibrary(); renderLineagePanel(record); toast(error.message || '外部追溯失败，已显示本地结果');
+  } finally { button.disabled = false; button.textContent = record.lineage ? '刷新追溯' : '查询追溯'; }
+}
+
 function toggleCompare(id) { if (state.compare.has(id)) state.compare.delete(id); else if (state.compare.size >= 3) return toast('最多同时对比 3 篇论文'); else state.compare.add(id); updateCompareTray(); renderCurrentView(); renderDrawerActions(); }
 function updateCompareTray() { el('compare-count').textContent = `已选 ${state.compare.size} 篇`; el('compare-tray').classList.toggle('show', state.compare.size > 0); }
 function renderCompare() {
@@ -487,7 +864,10 @@ function renderCommands(query = '') {
   el('command-list').innerHTML = `${pages.map(item => `<button class="command-item" data-command-route="${item.route}"><span>${item.label}</span><small>${item.hint}</small></button>`).join('')}${papers.map(paper => `<button class="command-item" data-command-paper="${escapeHtml(paper.id)}"><span>${escapeHtml(paper.title)}</span><small>${paper.area === 'architecture' ? '体系结构' : 'AI'}</small></button>`).join('')}` || '<div class="empty">没有匹配结果</div>';
 }
 function openCommand(query = '') { el('command-modal').classList.add('open'); el('command-input').value = query; renderCommands(query); setTimeout(() => el('command-input').focus(), 0); }
-function closeModal(id) { el(id).classList.remove('open'); }
+function closeModal(id) {
+  el(id).classList.remove('open');
+  if (id === 'pdf-modal') closePdfReader();
+}
 
 function toggleVenueSave(name) { const saved = new Set(library.savedVenues || []); saved.has(name) ? saved.delete(name) : saved.add(name); library.savedVenues = [...saved]; saveLibrary(); renderCurrentView(); }
 function downloadIcs(venue) {
@@ -752,6 +1132,7 @@ function translationPaperId(root) {
   const paperRow = root?.closest('[data-paper-id]'); if (paperRow) return paperRow.dataset.paperId;
   const libraryRowNode = root?.closest('[data-library-id]'); if (libraryRowNode) return libraryRowNode.dataset.libraryId;
   const vocabularyRow = root?.closest('[data-vocabulary-id]'); if (vocabularyRow) return library.vocabulary?.[vocabularyRow.dataset.vocabularyId]?.paperId || null;
+  if (root?.closest('#pdf-modal')) return state.pdfPaperId;
   return root?.closest('#paper-drawer') ? state.selectedPaperId : null;
 }
 function syncTranslationPinButton() {
@@ -1188,7 +1569,7 @@ el('library-list').addEventListener('click', event => {
     return;
   }
   const row = event.target.closest('[data-library-id]'); if (!row) return; const id = row.dataset.libraryId; const action = event.target.closest('[data-library-action]')?.dataset.libraryAction;
-  if (action === 'open') openPaperRoute(id); else if (action === 'save') toggleRecordField(id, 'saved'); else if (action === 'compare') toggleCompare(id);
+  if (action === 'open') openPaperRoute(id); else if (action === 'pdf') openPdfReader(id); else if (action === 'save') toggleRecordField(id, 'saved'); else if (action === 'compare') toggleCompare(id);
 });
 el('library-list').addEventListener('change', event => { if (!event.target.matches('[data-library-select]')) return; const id = event.target.closest('[data-library-id]').dataset.libraryId; event.target.checked ? state.batch.add(id) : state.batch.delete(id); updateBatchCount(); });
 el('library-select-all').addEventListener('change', event => { document.querySelectorAll('[data-library-select]').forEach(input => { input.checked = event.target.checked; const id = input.closest('[data-library-id]').dataset.libraryId; event.target.checked ? state.batch.add(id) : state.batch.delete(id); }); updateBatchCount(); });
@@ -1199,6 +1580,8 @@ el('check-publications').addEventListener('click', async () => { const ids = sta
 el('collection-filter').addEventListener('change', event => { const route = parseRoute(); navigate('library/collections', { ...route.query, collection: event.target.value, page: 1 }); });
 el('create-collection').addEventListener('click', () => { const name = el('new-collection-name').value.trim(); if (!name) return toast('请输入专题名称'); const id = `${slug(name)}-${Date.now().toString(36)}`; library.collections[id] = { name, createdAt: new Date().toISOString() }; saveLibrary(); el('new-collection-name').value = ''; renderRoute(); toast('专题已创建'); });
 el('export-vocabulary').addEventListener('click', exportVocabulary); el('export-library').addEventListener('click', exportLibrary); el('import-library').addEventListener('click', () => el('import-file').click()); el('import-file').addEventListener('change', event => { const [file] = event.target.files; if (file) importLibraryFile(file); event.target.value = ''; });
+el('import-local-pdf').addEventListener('click', () => el('local-pdf-file').click());
+el('local-pdf-file').addEventListener('change', async event => { const [file] = event.target.files; if (file) await importStandalonePdf(file); event.target.value = ''; });
 
 ['news-source', 'news-page-size'].forEach(id => el(id).addEventListener('change', () => { const route = parseRoute(); navigate('news', { ...route.query, source: el('news-source').value, size: el('news-page-size').value, page: 1 }); }));
 ['venue-area', 'venue-type', 'venue-status', 'venue-sort'].forEach(id => el(id).addEventListener('change', () => { const route = parseRoute(); navigate('venues', { ...route.query, area: el('venue-area').value, type: el('venue-type').value, status: el('venue-status').value, sort: el('venue-sort').value, page: 1 }); }));
@@ -1208,6 +1591,19 @@ el('drawer-close').addEventListener('click', () => closeDrawer()); el('drawer-ov
 el('detail-publication').addEventListener('click', async () => { el('detail-publication').disabled = true; el('detail-publication-status').textContent = '查询 Crossref…'; await checkPublication(state.selectedPaperId); el('detail-publication').disabled = false; });
 el('copy-bibtex').addEventListener('click', () => copyText(bibtexFor(getPaper(state.selectedPaperId)), 'BibTeX 已复制')); el('copy-markdown').addEventListener('click', () => copyText(markdownFor(getPaper(state.selectedPaperId)), 'Markdown 引用已复制'));
 el('detail-bilingual').addEventListener('click', translatePaperAbstract);
+el('detail-pdf-import').addEventListener('click', () => el('detail-pdf-file').click());
+el('detail-pdf-file').addEventListener('change', async event => { const [file] = event.target.files; if (file) await attachPdfToPaper(file, state.selectedPaperId); event.target.value = ''; });
+el('detail-pdf-open').addEventListener('click', () => openPdfReader(state.selectedPaperId));
+el('detail-pdf-download').addEventListener('click', () => downloadAttachedPdf(state.selectedPaperId));
+el('detail-pdf-remove').addEventListener('click', () => removeAttachedPdf(state.selectedPaperId));
+el('detail-lineage').addEventListener('click', () => loadPaperLineage(state.selectedPaperId));
+el('pdf-prev').addEventListener('click', async () => { if (state.pdfPage > 1) { state.pdfPage -= 1; await renderPdfPage(); } });
+el('pdf-next').addEventListener('click', async () => { if (state.pdfDocument && state.pdfPage < state.pdfDocument.numPages) { state.pdfPage += 1; await renderPdfPage(); } });
+el('pdf-zoom').addEventListener('change', async event => { state.pdfScale = Number(event.target.value); await renderPdfPage(); });
+el('pdf-search-button').addEventListener('click', searchPdfText);
+el('pdf-search-input').addEventListener('keydown', event => { if (event.key === 'Enter') searchPdfText(); });
+el('pdf-search-results').addEventListener('click', async event => { const button = event.target.closest('[data-pdf-page]'); if (!button) return; state.pdfPage = Number(button.dataset.pdfPage); await renderPdfPage(); });
+el('pdf-copy-page').addEventListener('click', () => copyText(state.pdfRecord?.pages?.[state.pdfPage - 1] || '', '本页文本已复制'));
 el('save-note').addEventListener('click', () => { const record = ensureRecord(getPaper(state.selectedPaperId)); record.note = el('paper-note').value.trim(); record.tags = [...new Set(el('paper-tags').value.split(/[,，]/).map(value => value.trim()).filter(Boolean))].slice(0, 12); record.progress = Number(el('reading-progress').value); if (record.progress === 100) record.readAt ||= new Date().toISOString(); saveLibrary(); toast('阅读记录已保存'); });
 el('add-to-collection').addEventListener('click', () => { const collectionId = el('paper-collection').value; if (!collectionId) return toast('请先选择专题'); const record = ensureRecord(getPaper(state.selectedPaperId)); if (!record.collections.includes(collectionId)) record.collections.push(collectionId); saveLibrary(); toast('已加入专题收藏'); });
 el('add-highlight').addEventListener('click', () => { const selection = window.getSelection(); const text = selection?.toString().replace(/\s+/g, ' ').trim(); const anchor = selection?.anchorNode; if (!text || text.length < 3) return toast('请先选中摘要文字'); if (text.length > 500) return toast('单条标注最多 500 字符'); if (!anchor || !el('detail-abstract').contains(anchor.nodeType === Node.TEXT_NODE ? anchor.parentNode : anchor)) return toast('只能标注摘要文字'); const record = ensureRecord(getPaper(state.selectedPaperId)); if (record.highlights.some(item => item.text === text)) return toast('这段文字已经标注'); record.highlights.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), text, color: el('highlight-color').value, createdAt: new Date().toISOString() }); saveLibrary(); selection.removeAllRanges(); renderHighlights(); toast('标注已保存'); });
@@ -1265,7 +1661,7 @@ el('update-now').addEventListener('click', () => {
 });
 el('update-later').addEventListener('click', () => el('update-banner').classList.remove('show'));
 document.querySelectorAll('.modal').forEach(modal => modal.addEventListener('click', event => { if (event.target === modal) closeModal(modal.id); }));
-document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommand(); } if (event.key === 'Escape') { closeTranslationPopover(); document.querySelectorAll('.modal.open').forEach(node => node.classList.remove('open')); if (el('paper-drawer').classList.contains('open')) closeDrawer(); } });
+document.addEventListener('keydown', event => { if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommand(); } if (event.key === 'Escape') { closeTranslationPopover(); document.querySelectorAll('.modal.open').forEach(node => closeModal(node.id)); if (el('paper-drawer').classList.contains('open')) closeDrawer(); } });
 
 el('edit-profile').addEventListener('click', () => el('profile-modal').classList.add('open')); el('save-profile').addEventListener('click', () => { library.profile.name = el('profile-name').value.trim() || '研究者'; library.profile.focus = el('profile-focus').value.trim(); library.profile.bio = el('profile-bio').value.trim(); saveLibrary(); renderProfile(); closeModal('profile-modal'); toast('个人资料已保存'); });
 function applyTheme(theme) { document.documentElement.dataset.theme = theme; localStorage.setItem(THEME_KEY, theme); el('theme-toggle').textContent = theme === 'dark' ? '☀' : '◐'; }

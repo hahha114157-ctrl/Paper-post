@@ -1,11 +1,16 @@
 {
   "name": "paperscope",
-  "version": "6.0.1",
+  "version": "6.1.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build-static.mjs",
     "start": "node scripts/preview.mjs"
   },
-  "engines": { "node": ">=18" }
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "pdfjs-dist": "6.1.200"
+  }
 }

@@ -1,10 +1,12 @@
-const VERSION = '6.0.1';
-const CACHE = `paperscope-pages-v10-${VERSION}`;
+const VERSION = '6.1.0';
+const CACHE = `paperscope-pages-v11-${VERSION}`;
 const SHELL = [
   './',
   `./app.js?v=${VERSION}`,
   './manifest.webmanifest',
   './icon.svg',
+  `./vendor/pdfjs/pdf.mjs?v=${VERSION}`,
+  `./vendor/pdfjs/pdf.worker.mjs?v=${VERSION}`,
   `./data/dictionary/manifest.json?v=${VERSION}`,
   `./data/dictionary/domain.json?v=${VERSION}`
 ];

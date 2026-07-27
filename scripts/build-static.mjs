@@ -316,10 +316,19 @@ async function build() {
   const finalIds = new Set([...aiPapers, ...architecturePapers].map(paper => paper.id));
   const collectionData = sections.map(section => ({ ...section, items: undefined, paperIds: section.items.map(paper => paper.id).filter(id => finalIds.has(id)) })).filter(section => section.paperIds.length);
   const aiDigest = analyze(aiPapers, AI_TOPICS, '人工智能'); const architectureDigest = analyze(architecturePapers, ARCH_TOPICS, '计算机体系结构'); const recommendations = dailyPlan([...aiPapers, ...architecturePapers]);
-  await rm(dist, { recursive: true, force: true }); await mkdir(path.join(dist, 'data'), { recursive: true });
+  await rm(dist, { recursive: true, force: true });
+  await Promise.all([
+    mkdir(path.join(dist, 'data'), { recursive: true }),
+    mkdir(path.join(dist, 'vendor', 'pdfjs'), { recursive: true })
+  ]);
   await Promise.all([
     ...STATIC_FILES.map(file => copyFile(path.join(root, file), path.join(dist, file))),
-    cp(path.join(root, 'data', 'dictionary'), path.join(dist, 'data', 'dictionary'), { recursive: true })
+    cp(path.join(root, 'data', 'dictionary'), path.join(dist, 'data', 'dictionary'), { recursive: true }),
+    copyFile(path.join(root, 'node_modules', 'pdfjs-dist', 'build', 'pdf.mjs'), path.join(dist, 'vendor', 'pdfjs', 'pdf.mjs')),
+    copyFile(path.join(root, 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'), path.join(dist, 'vendor', 'pdfjs', 'pdf.worker.mjs')),
+    cp(path.join(root, 'node_modules', 'pdfjs-dist', 'cmaps'), path.join(dist, 'vendor', 'pdfjs', 'cmaps'), { recursive: true }),
+    cp(path.join(root, 'node_modules', 'pdfjs-dist', 'standard_fonts'), path.join(dist, 'vendor', 'pdfjs', 'standard_fonts'), { recursive: true }),
+    cp(path.join(root, 'node_modules', 'pdfjs-dist', 'wasm'), path.join(dist, 'vendor', 'pdfjs', 'wasm'), { recursive: true })
   ]);
   const json = (name, data) => writeFile(path.join(dist, 'data', `${name}.json`), JSON.stringify(data, null, 2));
   const collectionErrors = collectionResults.filter(item => item.error).map(item => `${item.name}：${item.error}`);

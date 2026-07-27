@@ -24,6 +24,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+      - name: Install pinned dependencies
+        run: npm ci
       - name: Build static research digest
         run: npm run build
         env:
