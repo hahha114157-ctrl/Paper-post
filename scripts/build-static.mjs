@@ -1,4 +1,4 @@
-import { copyFile, mkdir, rm, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -316,7 +316,11 @@ async function build() {
   const finalIds = new Set([...aiPapers, ...architecturePapers].map(paper => paper.id));
   const collectionData = sections.map(section => ({ ...section, items: undefined, paperIds: section.items.map(paper => paper.id).filter(id => finalIds.has(id)) })).filter(section => section.paperIds.length);
   const aiDigest = analyze(aiPapers, AI_TOPICS, '人工智能'); const architectureDigest = analyze(architecturePapers, ARCH_TOPICS, '计算机体系结构'); const recommendations = dailyPlan([...aiPapers, ...architecturePapers]);
-  await rm(dist, { recursive: true, force: true }); await mkdir(path.join(dist, 'data'), { recursive: true }); await Promise.all(STATIC_FILES.map(file => copyFile(path.join(root, file), path.join(dist, file))));
+  await rm(dist, { recursive: true, force: true }); await mkdir(path.join(dist, 'data'), { recursive: true });
+  await Promise.all([
+    ...STATIC_FILES.map(file => copyFile(path.join(root, file), path.join(dist, file))),
+    cp(path.join(root, 'data', 'dictionary'), path.join(dist, 'data', 'dictionary'), { recursive: true })
+  ]);
   const json = (name, data) => writeFile(path.join(dist, 'data', `${name}.json`), JSON.stringify(data, null, 2));
   const collectionErrors = collectionResults.filter(item => item.error).map(item => `${item.name}：${item.error}`);
   await Promise.all([

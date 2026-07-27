@@ -15,14 +15,29 @@
   <style>
     .icon-button.active{background:var(--pale);border-color:color-mix(in srgb,var(--green) 45%,var(--line));color:var(--green)}
     html.translation-enabled [data-translatable]{cursor:text}
-    .translation-popover{position:fixed;display:none;width:min(370px,calc(100vw - 24px));max-height:min(440px,70vh);overflow:auto;z-index:28;background:var(--card);border:1px solid var(--line);border-radius:13px;box-shadow:0 22px 65px #0004;padding:14px}
+    .translation-popover{position:fixed;display:none;width:min(430px,calc(100vw - 24px));max-height:min(620px,82vh);overflow:hidden;resize:both;z-index:28;background:var(--card);border:1px solid var(--line);border-radius:13px;box-shadow:0 22px 65px #0004}
     .translation-popover.open{display:block;animation:appear .14s ease}
-    .translation-popover-head{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px}
+    .translation-popover.pinned{border-color:color-mix(in srgb,var(--green) 60%,var(--line));box-shadow:0 24px 70px #0005}
+    .translation-popover-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:10px 12px;border-bottom:1px solid var(--line);background:var(--soft);cursor:grab;user-select:none;touch-action:none}
+    .translation-popover-head.dragging{cursor:grabbing}
     .translation-popover-head strong{font-size:11px;color:var(--green)}
-    .translation-popover-head button{border:0;background:transparent;color:var(--muted);font-size:17px}
+    .translation-popover-controls{display:flex;align-items:center;gap:3px}
+    .translation-popover-head button{border:0;background:transparent;color:var(--muted);font-size:15px;min-width:28px;height:28px;border-radius:7px}
+    .translation-popover-head button:hover,.translation-popover-head button.active{background:var(--pale);color:var(--green)}
+    .translation-popover-body{padding:13px 14px 15px;max-height:calc(min(620px,82vh) - 49px);overflow:auto}
     .translation-original{font:11px/1.55 ui-monospace,SFMono-Regular,monospace;color:var(--muted);word-break:break-word}
     .translation-result{font-size:13px;line-height:1.7;margin:8px 0 10px;word-break:break-word}
     .translation-state{font-size:10px;color:var(--muted);margin:7px 0}
+    .translation-section{margin:11px 0;padding-top:10px;border-top:1px solid var(--line)}
+    .translation-section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px;font-size:10px;color:var(--green);font-weight:780}
+    .translation-source{font:9px ui-monospace,SFMono-Regular,monospace;color:var(--muted)}
+    .dictionary-entry{padding:8px 9px;border-radius:9px;background:var(--soft);margin-top:6px}
+    .dictionary-entry strong{font-size:12px}.dictionary-entry small{color:var(--muted);margin-left:5px}
+    .dictionary-senses{margin:5px 0 0;padding-left:19px}.dictionary-senses li{font-size:11px;margin:3px 0}
+    .translation-alternatives{display:flex;gap:5px;flex-wrap:wrap}.translation-alternatives button{border:1px solid var(--line);background:var(--card);border-radius:7px;padding:5px 7px;font-size:10px}
+    .translation-context{font-size:10px;line-height:1.6;color:var(--muted);background:var(--soft);padding:8px 9px;border-radius:8px;max-height:72px;overflow:auto}
+    .bilingual-abstract{margin:10px 0 14px;padding:13px 14px;border-radius:10px;border:1px solid var(--line);background:var(--soft)}
+    .bilingual-abstract strong{display:block;font-size:10px;color:var(--green);margin-bottom:6px}.bilingual-abstract p{font-size:11px;line-height:1.8;margin:0;white-space:pre-line}
     .translation-actions{display:flex;gap:6px;flex-wrap:wrap}
     .translation-settings{display:grid;gap:12px}
     .setting-row{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;padding:11px 0;border-bottom:1px solid var(--line)}
@@ -37,6 +52,9 @@
     .switch input:checked+span:after{transform:translateX(17px)}
     .translation-engine{padding:11px 12px;border-radius:10px;background:var(--soft);font-size:10px;color:var(--muted)}
     .translation-engine strong{color:var(--ink);display:block;margin-bottom:3px}
+    .translation-select,.translation-input{border:1px solid var(--line);background:var(--card);border-radius:8px;padding:8px 9px;font-size:11px;min-width:160px;outline:0}
+    .translation-input{width:min(300px,48vw)}
+    .translation-pack-progress{height:5px;background:var(--line);border-radius:5px;overflow:hidden;margin-top:7px}.translation-pack-progress i{display:block;height:100%;width:0;background:var(--green);transition:.2s}
     .vocabulary-row{padding:14px 16px;border-bottom:1px solid var(--line);display:grid;grid-template-columns:1fr auto;gap:12px}
     .vocabulary-row:last-child{border-bottom:0}
     .vocabulary-row h3{font:13px ui-monospace,SFMono-Regular,monospace;margin:0 0 3px}
@@ -49,7 +67,7 @@
     .update-banner span{display:block;color:var(--muted);font-size:10px;margin-top:2px}
     .update-actions{display:flex;gap:6px;flex:none}
     @media(max-width:980px){.library-stats{grid-template-columns:repeat(6,1fr)}}
-    @media(max-width:720px){.library-stats{grid-template-columns:repeat(3,1fr)}.translation-popover{bottom:75px!important;left:12px!important;top:auto!important;width:calc(100vw - 24px)}.setting-row{gap:12px}.update-banner{align-items:flex-start}.update-actions{display:grid}}
+    @media(max-width:720px){.library-stats{grid-template-columns:repeat(3,1fr)}.translation-popover{bottom:75px!important;left:12px!important;top:auto!important;width:calc(100vw - 24px);max-height:68vh;resize:none}.translation-popover-body{max-height:calc(68vh - 49px)}.translation-popover-head{cursor:default}.setting-row{gap:12px}.setting-row{align-items:center}.translation-input{width:min(220px,52vw)}.update-banner{align-items:flex-start}.update-actions{display:grid}}
   </style>
 </head>
 <body>
@@ -120,10 +138,10 @@
     </section>
 
     <section class="view" id="view-library">
-      <div class="page-head"><div><div class="eyebrow">PERSONAL RESEARCH LIBRARY</div><h1>我的文献库</h1><p class="subtitle">收藏、阅读队列、笔记与专题都保存在当前浏览器。</p></div><div class="page-actions"><button class="ghost" id="export-library">导出备份</button><button class="ghost" id="import-library">导入</button><input class="hidden" type="file" id="import-file" accept="application/json"></div></div>
+      <div class="page-head"><div><div class="eyebrow">PERSONAL RESEARCH LIBRARY</div><h1>我的文献库</h1><p class="subtitle">收藏、阅读队列、笔记、术语与翻译历史都保存在当前浏览器。</p></div><div class="page-actions"><button class="ghost" id="export-vocabulary">导出生词</button><button class="ghost" id="export-library">导出备份</button><button class="ghost" id="import-library">导入</button><input class="hidden" type="file" id="import-file" accept="application/json"></div></div>
       <section class="card">
         <div class="profile-panel"><div class="profile-info"><span class="avatar" id="profile-avatar">研</span><div><h2 id="profile-name-display">研究者</h2><p id="profile-focus-display">AI · 计算机体系结构</p></div><button class="small" id="edit-profile">编辑</button></div><div class="library-stats"><div class="library-stat"><span>收藏</span><b id="stat-saved">0</b></div><div class="library-stat"><span>队列</span><b id="stat-queue">0</b></div><div class="library-stat"><span>已读</span><b id="stat-read">0</b></div><div class="library-stat"><span>笔记</span><b id="stat-notes">0</b></div><div class="library-stat"><span>已发表</span><b id="stat-published">0</b></div><div class="library-stat"><span>生词</span><b id="stat-terms">0</b></div></div></div>
-        <div class="tabs" id="library-tabs"><button data-tab="saved">收藏</button><button data-tab="queue">阅读队列</button><button data-tab="recent">最近看过</button><button data-tab="notes">笔记与标注</button><button data-tab="published">发表动态</button><button data-tab="collections">专题收藏</button><button data-tab="vocabulary">生词本</button></div>
+        <div class="tabs" id="library-tabs"><button data-tab="saved">收藏</button><button data-tab="queue">阅读队列</button><button data-tab="recent">最近看过</button><button data-tab="notes">笔记与标注</button><button data-tab="published">发表动态</button><button data-tab="collections">专题收藏</button><button data-tab="vocabulary">生词本</button><button data-tab="translations">翻译历史</button></div>
         <div class="batchbar" id="library-batchbar"><div><label><input type="checkbox" id="library-select-all"> 全选本页</label> <span class="mono" id="batch-count">0 项已选</span></div><div><button class="small" id="batch-read">批量已读</button> <button class="small" id="batch-queue">加入队列</button> <button class="small" id="batch-citations">导出引用</button> <button class="small" id="check-publications">检查中刊状态</button></div></div>
         <div class="filterbar hidden" id="collection-tools"><select id="collection-filter"><option value="all">全部专题</option></select><input class="grow" id="new-collection-name" placeholder="新专题名称"><button class="small" id="create-collection">创建专题</button></div>
         <div id="library-list"></div>
@@ -151,10 +169,10 @@
 <aside class="drawer" id="paper-drawer">
   <button class="drawer-close" id="drawer-close" aria-label="关闭">×</button><div class="eyebrow">PAPER WORKSPACE</div><h2 id="detail-title" data-translatable></h2><div class="meta" id="detail-meta"></div>
   <div class="drawer-actions"><button class="small" id="detail-save">☆ 收藏</button><button class="small" id="detail-queue">＋ 阅读队列</button><button class="small" id="detail-read">○ 标为已读</button><button class="small" id="detail-publication">检查中刊状态</button><span class="tag" id="detail-publication-status">尚未检查</span></div>
-  <div class="drawer-actions"><button class="small" id="copy-bibtex">复制 BibTeX</button><button class="small" id="copy-markdown">复制 Markdown</button><button class="small" id="detail-compare">加入对比</button></div>
+  <div class="drawer-actions"><button class="small" id="copy-bibtex">复制 BibTeX</button><button class="small" id="copy-markdown">复制 Markdown</button><button class="small" id="detail-compare">加入对比</button><button class="small" id="detail-bilingual">生成中英对照</button></div>
   <div class="publication-panel"><strong id="detail-venue-title">正式收录信息</strong><p id="detail-venue-date"></p><p id="detail-quality-reason"></p><div class="publication-links"><a id="detail-official-link" target="_blank" rel="noopener">官方/出版方页面 ↗</a><a id="detail-arxiv-link" target="_blank" rel="noopener">arXiv 备用版本 ↗</a></div></div>
   <div class="summary"><strong>结构化阅读摘要</strong><p id="detail-summary"></p><ul id="detail-points" data-translatable></ul><small id="detail-limitation"></small></div>
-  <div class="abstract" id="detail-abstract" data-translatable></div><div class="annotation-tools"><select id="highlight-color"><option value="#e6c95b">黄色标注</option><option value="#83c6a3">绿色标注</option><option value="#8ebbe0">蓝色标注</option><option value="#dfa0b2">粉色标注</option></select><button class="small" id="add-highlight">标注已选文字</button><span class="mono">选中文字可翻译，也可保存标注</span></div>
+  <div class="abstract" id="detail-abstract" data-translatable></div><div class="bilingual-abstract hidden" id="detail-bilingual-panel"><strong id="detail-bilingual-source">中文摘要</strong><p id="detail-bilingual-text"></p></div><div class="annotation-tools"><select id="highlight-color"><option value="#e6c95b">黄色标注</option><option value="#83c6a3">绿色标注</option><option value="#8ebbe0">蓝色标注</option><option value="#dfa0b2">粉色标注</option></select><button class="small" id="add-highlight">标注已选文字</button><span class="mono">选中文字可翻译，也可保存标注</span></div>
   <div class="editor"><strong>阅读与整理</strong><select id="reading-progress"><option value="0">阅读进度：未开始</option><option value="25">阅读进度：略读 25%</option><option value="50">阅读进度：阅读中 50%</option><option value="75">阅读进度：精读中 75%</option><option value="100">阅读完成 100%</option></select><textarea id="paper-note" placeholder="记录方法、实验、疑问或复现计划…"></textarea><input id="paper-tags" placeholder="标签，用逗号分隔"><div style="display:flex;gap:6px"><select id="paper-collection"><option value="">选择专题收藏</option></select><button class="small" id="add-to-collection">加入专题</button></div><button class="primary" id="save-note">保存阅读记录</button></div>
   <div class="highlights"><strong>摘要标注</strong><div id="highlight-list"></div></div>
   <div class="detail-nav"><button class="ghost" id="previous-paper">← 上一篇</button><a class="open-paper" id="detail-link" target="_blank" rel="noopener">打开原文 ↗</a><button class="ghost" id="next-paper">下一篇 →</button></div>
@@ -164,10 +182,33 @@
 <div class="modal" id="compare-modal"><div class="dialog"><div class="dialog-head"><h2>论文对比</h2><button class="icon-button" data-close-modal="compare-modal">×</button></div><div class="table-wrap"><table class="compare-table" id="compare-table"></table></div></div></div>
 <div class="modal" id="command-modal"><div class="dialog command-dialog"><input id="command-input" placeholder="跳转页面或搜索论文…"><div class="command-list" id="command-list"></div></div></div>
 <div class="modal" id="profile-modal"><div class="dialog" style="width:min(520px,95vw)"><div class="dialog-head"><h2>编辑个人资料</h2><button class="icon-button" data-close-modal="profile-modal">×</button></div><div class="editor"><input id="profile-name" maxlength="30" placeholder="显示名称"><input id="profile-focus" maxlength="80" placeholder="研究方向"><textarea id="profile-bio" maxlength="180" placeholder="个人简介"></textarea><button class="primary" id="save-profile">保存资料</button></div></div></div>
-<div class="modal" id="translation-modal"><div class="dialog" id="translation-dialog" tabindex="-1" aria-labelledby="translation-modal-title" style="width:min(570px,95vw)"><div class="dialog-head"><h2 id="translation-modal-title">阅读翻译</h2><button class="icon-button" data-close-modal="translation-modal">×</button></div><div class="translation-settings"><div class="translation-engine"><strong id="translation-engine-title">正在检查本地翻译能力</strong><span id="translation-engine-detail">优先使用浏览器内置英译中模型，译文不会上传到 PaperScope。</span></div><div class="setting-row"><div><b>启用阅读翻译</b><small>关闭后不再监听单击、选区，也不会发起翻译。</small></div><label class="switch"><input type="checkbox" id="translation-enabled"><span></span></label></div><div class="setting-row"><div><b>单击英文单词</b><small>仅在论文摘要和详情阅读区域生效，不抢占按钮或链接。</small></div><label class="switch"><input type="checkbox" id="translation-word-click"><span></span></label></div><div class="setting-row"><div><b>框选英文自动翻译</b><small>最多翻译 1,000 个字符；移动端长按选择后同样适用。</small></div><label class="switch"><input type="checkbox" id="translation-selection"><span></span></label></div><div class="setting-row"><div><b>保存本地翻译缓存</b><small>最多保存 300 条，减少重复翻译；数据只保存在当前浏览器。</small></div><label class="switch"><input type="checkbox" id="translation-cache"><span></span></label></div><div class="translation-actions"><button class="primary" id="translation-prepare">准备本地翻译</button><button class="ghost" id="translation-clear-cache">清除翻译缓存</button><button class="ghost" id="translation-open-vocabulary">查看生词本</button></div><p class="mono">当前版本不使用云端翻译，也不会在前端保存第三方 API 密钥。不支持本地 Translator API 的浏览器会提供复制原文功能。</p></div></div></div>
-<aside class="translation-popover" id="translation-popover" role="dialog" aria-live="polite" aria-label="英译中"><div class="translation-popover-head"><strong>EN → 中文</strong><button id="translation-close" aria-label="关闭翻译">×</button></div><div class="translation-original" id="translation-original"></div><div class="translation-state" id="translation-state"></div><div class="translation-result" id="translation-result"></div><div class="translation-actions"><button class="primary hidden" id="translation-prepare-inline">准备本地翻译</button><button class="small" id="translation-copy">复制译文</button><button class="small" id="translation-vocabulary">加入生词本</button><button class="small" id="translation-note">加入论文笔记</button></div></aside>
+<div class="modal" id="translation-modal"><div class="dialog" id="translation-dialog" tabindex="-1" aria-labelledby="translation-modal-title" style="width:min(650px,95vw)"><div class="dialog-head"><h2 id="translation-modal-title">阅读翻译</h2><button class="icon-button" data-close-modal="translation-modal">×</button></div><div class="translation-settings">
+  <div class="translation-engine"><strong id="translation-engine-title">正在检查翻译能力</strong><span id="translation-engine-detail">单词优先查询离线多义词典，段落优先使用浏览器本地模型。</span></div>
+  <div class="setting-row"><div><b>启用阅读翻译</b><small>关闭后不再监听单击、选区，也不会发起翻译。</small></div><label class="switch"><input type="checkbox" id="translation-enabled"><span></span></label></div>
+  <div class="setting-row"><div><b>翻译策略</b><small>自动模式优先离线与本地模型，在线精译只在你主动点击时发送文本。</small></div><select class="translation-select" id="translation-mode"><option value="auto">自动 · 推荐</option><option value="offline">仅离线</option><option value="online">优先在线精译</option></select></div>
+  <div class="setting-row"><div><b>单击英文单词或术语</b><small>识别最多四个词的论文术语，并显示多个词性和义项。</small></div><label class="switch"><input type="checkbox" id="translation-word-click"><span></span></label></div>
+  <div class="setting-row"><div><b>框选英文自动翻译</b><small>最多翻译 2,000 个字符；移动端长按选择后同样适用。</small></div><label class="switch"><input type="checkbox" id="translation-selection"><span></span></label></div>
+  <div class="setting-row"><div><b>翻译框位置</b><small>跟随选区会显示在文字附近；固定位置会记住拖动后的位置。</small></div><select class="translation-select" id="translation-position-mode"><option value="follow">跟随选区</option><option value="pinned">固定位置</option></select></div>
+  <div class="setting-row"><div><b>在线精译代理</b><small>只填写你自己的 HTTPS Worker 地址；第三方 API 密钥保存在 Worker Secret 中。</small></div><input class="translation-input" id="translation-endpoint" type="url" placeholder="https://…workers.dev/translate"></div>
+  <div class="setting-row"><div><b>保存本地翻译缓存</b><small>最多保存 500 条译文和 200 条查询历史，减少重复请求。</small></div><label class="switch"><input type="checkbox" id="translation-cache"><span></span></label></div>
+  <div class="translation-engine"><strong id="translation-pack-title">离线词典按需加载</strong><span id="translation-pack-detail">专业术语随网页提供，通用英汉词典按首字母下载并离线缓存。</span><div class="translation-pack-progress"><i id="translation-pack-progress"></i></div></div>
+  <div class="translation-actions"><button class="primary" id="translation-prepare">准备本地翻译</button><button class="ghost" id="translation-download-dictionary">下载完整离线词典</button><button class="ghost" id="translation-test-endpoint">测试在线代理</button><button class="ghost" id="translation-reset-position">恢复弹窗位置</button><button class="ghost" id="translation-clear-cache">清除翻译缓存</button><button class="ghost" id="translation-open-vocabulary">查看生词本</button></div>
+  <p class="mono">离线结果不会上传。只有点击“在线精译”或选择“优先在线”时，选中文字及其上下文才会发送到你配置的代理。</p>
+</div></div></div>
+<aside class="translation-popover" id="translation-popover" role="dialog" aria-live="polite" aria-label="英译中">
+  <div class="translation-popover-head" id="translation-drag-handle"><strong>EN → 中文</strong><div class="translation-popover-controls"><button id="translation-pin" aria-label="固定翻译框位置" aria-pressed="false" title="固定位置">⌖</button><button id="translation-close" aria-label="关闭翻译">×</button></div></div>
+  <div class="translation-popover-body">
+    <div class="translation-original" id="translation-original"></div>
+    <div class="translation-state" id="translation-state"></div>
+    <div class="translation-result" id="translation-result"></div>
+    <section class="translation-section hidden" id="translation-dictionary-section"><div class="translation-section-title"><span>词典释义</span><span class="translation-source" id="translation-dictionary-source"></span></div><div id="translation-dictionary"></div></section>
+    <section class="translation-section hidden" id="translation-alternatives-section"><div class="translation-section-title"><span>其他译法</span><span class="translation-source" id="translation-provider"></span></div><div class="translation-alternatives" id="translation-alternatives"></div></section>
+    <section class="translation-section hidden" id="translation-context-section"><div class="translation-section-title"><span>所在语境</span></div><div class="translation-context" id="translation-context"></div></section>
+    <div class="translation-actions"><button class="primary hidden" id="translation-prepare-inline">准备本地翻译</button><button class="primary" id="translation-online">在线精译</button><button class="small" id="translation-speak">朗读</button><button class="small" id="translation-copy">复制译文</button><button class="small" id="translation-vocabulary">加入生词本</button><button class="small" id="translation-note">加入论文笔记</button></div>
+  </div>
+</aside>
 <aside class="update-banner" id="update-banner" role="status" aria-live="polite"><div><strong>PaperScope 新版本已准备好</strong><span>刷新即可切换到完整新版，不会清除收藏、笔记或生词本。</span></div><div class="update-actions"><button class="primary" id="update-now">立即刷新</button><button class="ghost" id="update-later">稍后</button></div></aside>
 <button class="backtop" id="backtop" title="返回顶部">↑</button><div class="toast" id="toast"></div>
-<script src="./app.js?v=5.2.1"></script>
+<script src="./app.js?v=6.0.0"></script>
 </body>
 </html>

@@ -1,6 +1,13 @@
-const VERSION = '5.2.1';
-const CACHE = `paperscope-pages-v8-${VERSION}`;
-const SHELL = ['./', `./app.js?v=${VERSION}`, './manifest.webmanifest', './icon.svg'];
+const VERSION = '6.0.0';
+const CACHE = `paperscope-pages-v9-${VERSION}`;
+const SHELL = [
+  './',
+  `./app.js?v=${VERSION}`,
+  './manifest.webmanifest',
+  './icon.svg',
+  `./data/dictionary/manifest.json?v=${VERSION}`,
+  `./data/dictionary/domain.json?v=${VERSION}`
+];
 
 self.addEventListener('install', event => {
   event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)));

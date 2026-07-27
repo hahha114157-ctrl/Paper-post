@@ -115,3 +115,18 @@ iOS 通常不显示网页内的安装按钮，需要通过 Safari 菜单完成�
 - 页面没有即时抓取按钮，最新数据取决于最近一次工作流发布。
 - PWA 静态界面和最近缓存的数据可离线打开，更新仍需要网络。
 - 真正的后台消息推送仍需要 Web Push 服务、订阅数据库和 VAPID 密钥。
+
+## 十、启用在线精译（可选）
+
+离线多义词典和浏览器本地翻译不需要服务器。若要启用 DeepL 或
+LibreTranslate 在线精译，需要部署 `worker/` 目录中的 Cloudflare
+Worker；GitHub Pages 网址保持不变。
+
+1. 准备 DeepL API Key，或一个可访问的 LibreTranslate 服务。
+2. 按照 [在线精译代理说明](worker/README.md) 部署 Worker。
+3. 将 Worker 返回的 `https://…workers.dev/translate` 地址填入网页的
+   **翻译设置 → 在线精译代理**。
+4. 点击“测试在线代理”。
+
+第三方 API Key 必须通过 Worker Secret 保存，不能写入 `app.js`、
+GitHub Pages 或提交到 Git 仓库。
