@@ -1,4 +1,4 @@
-const APP_VERSION = '6.3.2';
+const APP_VERSION = '6.3.4';
 const STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
 const LEGACY_SAVED_KEY = 'paperscope-saved';
@@ -796,6 +796,7 @@ async function openPdfReader(paperId) {
     state.pdfRecord = stored; state.pdfPaperId = paperId;
     state.pdfPage = Math.max(1, Math.min(stored.pageCount, Number(getRecord(paperId)?.pdfAttachment?.lastPage || 1)));
     state.pdfScale = Number(el('pdf-zoom').value || 1.4);
+    clearPdfBrowseSelection();
     state.pdfAnnotationHistory = []; state.pdfAnnotationMode = null; state.pdfSelection = null;
     state.pdfViewMode = localStorage.getItem(PDF_VIEW_MODE_KEY) === 'paged' ? 'paged' : 'continuous';
     el('pdf-view-mode').value = state.pdfViewMode;
@@ -808,7 +809,9 @@ async function openPdfReader(paperId) {
   } catch (error) { toast(error.message || '无法打开 PDF'); }
 }
 function clearPdfPageObservers() {
+  discardPdfTextSelectionDraft();
   clearPdfBrowseSelection();
+  closeTranslationPopover();
   state.pdfContinuousObserver?.disconnect();
   state.pdfPageObserver?.disconnect();
   state.pdfContinuousObserver = null; state.pdfPageObserver = null;
@@ -845,7 +848,8 @@ function updatePdfCurrentPage(pageNumber, { save = true } = {}) {
   renderPdfAnnotationList();
   const attachment = getRecord(state.pdfPaperId)?.pdfAttachment;
   if (save && attachment && attachment.lastPage !== state.pdfPage) { attachment.lastPage = state.pdfPage; saveLibrary(); }
-  setPdfProgress(100, text ? `第 ${state.pdfPage} 页 · ${state.pdfAnnotationMode ? '标注工具已启用' : '可选择文字翻译'}` : `第 ${state.pdfPage} 页 · 未检测到文本层`);
+  const readyLabel = state.pdfAnnotationMode ? '标注工具已启用' : translationSettings.enabled ? '可选择文字翻译' : '可选择文字、复制或标注';
+  setPdfProgress(100, text ? `第 ${state.pdfPage} 页 · ${readyLabel}` : `第 ${state.pdfPage} 页 · 未检测到文本层`);
 }
 async function renderPdfPage() {
   if (!state.pdfDocument || !state.pdfRecord) return;
@@ -861,6 +865,10 @@ async function renderPdfPage() {
   el('pdf-pages-container').replaceChildren(stack);
   el('pdf-canvas-stage').scrollTop = 0; el('pdf-canvas-stage').scrollLeft = 0;
   await renderPdfPageIntoStack(page, stack, viewport, true);
+  // Canvas/text rendering can change the scrollable extent and let browser
+  // scroll anchoring restore an old offset. Paged mode must always open at
+  // the top-left of the newly rendered page.
+  el('pdf-canvas-stage').scrollTop = 0; el('pdf-canvas-stage').scrollLeft = 0;
   page.cleanup();
   updatePdfCurrentPage(pageNumber);
   updatePdfAnnotationMode();
@@ -885,7 +893,13 @@ async function renderPdfTextLayer(textContent, viewport, layer = pdfStackForPage
   if (!layer) return;
   layer.replaceChildren();
   layer.style.width = `${viewport.width}px`; layer.style.height = `${viewport.height}px`;
-  layer.style.setProperty('--scale-factor', state.pdfScale);
+  const totalScale = Number(viewport.scale) || state.pdfScale;
+  // PDF.js 6 text_layer_builder.css sizes glyphs with
+  // --total-scale-factor. Setting only the legacy --scale-factor leaves
+  // large headings at the fallback 13px size, so hit boxes no longer match
+  // the canvas and selections end far before the visible text.
+  layer.style.setProperty('--scale-factor', totalScale);
+  layer.style.setProperty('--total-scale-factor', totalScale);
   if (!textContent?.items?.length) return;
   try {
     const pdfjs = await loadPdfModule();
@@ -1001,9 +1015,9 @@ async function persistPdfRecord() {
 function pdfSelectionToolType() {
   return ['highlight', 'underline', 'note'].includes(state.pdfAnnotationMode) ? state.pdfAnnotationMode : null;
 }
-function mergePdfSelectionRects(rects, bounds) {
+function mergePdfSelectionRects(rects, bounds, clip = bounds) {
   const normalized = rects.map(rect => {
-    const left = Math.max(bounds.left, rect.left - 1); const right = Math.min(bounds.right, rect.right + 1);
+    const left = Math.max(bounds.left, clip.left, rect.left - 1); const right = Math.min(bounds.right, clip.right, rect.right + 1);
     const top = Math.max(bounds.top, rect.top); const bottom = Math.min(bounds.bottom, rect.bottom);
     return { left, right, top, bottom, width: right - left, height: bottom - top };
   }).filter(rect => rect.width > 1 && rect.height > 1);
@@ -1118,17 +1132,30 @@ function pdfStableColumnBreaks(lines, bounds) {
       cluster.x = cluster.values.reduce((sum, value) => sum + value.x, 0) / cluster.values.length;
     }
   }
-  const minimumSupport = Math.max(4, Math.min(9, Math.ceil(lines.length * .075)));
+  // A handful of deliberately split text nodes on a short single-column
+  // paragraph must not be promoted to a page column. Real journal columns
+  // repeat the same boundary across substantially more visual rows.
+  const minimumSupport = Math.max(8, Math.min(12, Math.ceil(lines.length * .1)));
   return clusters.map(cluster => {
     const lineIndexes = [...new Set(cluster.values.map(value => value.lineIndex))].sort((a, b) => a - b);
-    const gaps = cluster.values.map(value => value.gap).sort((a, b) => a - b);
-    const medianGap = gaps[Math.floor(gaps.length / 2)];
     return {
-      x: cluster.x, support: lineIndexes.length, medianGap,
-      softContinuation: medianGap >= -1.5 && medianGap <= Math.max(6, bounds.width * .007),
+      x: cluster.x, support: lineIndexes.length,
       minLineIndex: lineIndexes[0], maxLineIndex: lineIndexes.at(-1), tolerance
     };
-  }).filter(value => value.support >= minimumSupport && value.maxLineIndex - value.minLineIndex >= 3);
+  }).filter(value => value.support >= minimumSupport && value.maxLineIndex - value.minLineIndex >= 3).sort((a, b) => a.x - b.x);
+}
+function pdfColumnLaneForLeft(left, columnBreaks) {
+  return columnBreaks.reduce((lane, value) => left >= value.x - value.tolerance ? lane + 1 : lane, 0);
+}
+function pdfColumnLaneForRun(run, columnBreaks, bounds) {
+  const spansBoundary = columnBreaks.some(value =>
+    run.left < value.x - value.tolerance &&
+    run.right > value.x + Math.max(value.tolerance * 2, bounds.width * .055)
+  );
+  // Full-width titles, abstracts, figures and section banners can coexist
+  // above or below a multi-column body. Keep them in a separate spanning lane.
+  if (spansBoundary && run.width >= bounds.width * .56) return null;
+  return pdfColumnLaneForLeft(run.left, columnBreaks);
 }
 function pdfVisualTextLayout(layer) {
   const bounds = layer.getBoundingClientRect(); const fragments = pdfVisualTextFragments(layer);
@@ -1137,8 +1164,14 @@ function pdfVisualTextLayout(layer) {
     const center = (fragment.rect.top + fragment.rect.bottom) / 2;
     const line = lines.find(value => {
       const comparableHeight = Math.min(value.typicalHeight, fragment.rect.height);
-      const baselineClose = Math.abs(fragment.rect.bottom - value.baseline) <= Math.max(3, comparableHeight * .58);
-      const centerClose = Math.abs(center - value.center) <= Math.max(2, comparableHeight * .48);
+      // A permissive tolerance lets a taller fragment in the opposite column
+      // bridge two adjacent small-print lines. The two physical rows then
+      // become one logical line and a drag returns the paragraph above/below.
+      // PDF text nodes on the same visual row have almost identical baselines,
+      // so use a strict, font-relative tolerance and median anchors.
+      const lineTolerance = Math.max(2, comparableHeight * .34);
+      const baselineClose = Math.abs(fragment.rect.bottom - value.baseline) <= lineTolerance;
+      const centerClose = Math.abs(center - value.center) <= lineTolerance;
       return baselineClose || centerClose;
     });
     if (!line) lines.push({ top: fragment.rect.top, bottom: fragment.rect.bottom, height: fragment.rect.height, typicalHeight: fragment.rect.height, baseline: fragment.rect.bottom, center, fragments: [fragment] });
@@ -1146,10 +1179,12 @@ function pdfVisualTextLayout(layer) {
       line.fragments.push(fragment); line.top = Math.min(line.top, fragment.rect.top); line.bottom = Math.max(line.bottom, fragment.rect.bottom);
       line.height = line.bottom - line.top;
       const regularHeights = line.fragments.map(value => value.rect.height).sort((a, b) => a - b);
-      line.typicalHeight = regularHeights[Math.floor(regularHeights.length / 2)];
+      line.typicalHeight = regularHeights[Math.floor((regularHeights.length - 1) / 2)];
       const regular = line.fragments.filter(value => value.rect.height <= line.typicalHeight * 1.5);
-      line.baseline = regular.reduce((sum, value) => sum + value.rect.bottom, 0) / regular.length;
-      line.center = line.baseline - line.typicalHeight / 2;
+      const baselines = regular.map(value => value.rect.bottom).sort((a, b) => a - b);
+      const centers = regular.map(value => (value.rect.top + value.rect.bottom) / 2).sort((a, b) => a - b);
+      line.baseline = baselines[Math.floor((baselines.length - 1) / 2)];
+      line.center = centers[Math.floor((centers.length - 1) / 2)];
     }
   }
   lines.sort((a, b) => a.center - b.center);
@@ -1161,9 +1196,9 @@ function pdfVisualTextLayout(layer) {
     const lineRuns = [];
     for (const fragment of line.fragments) {
       const previous = lineRuns.at(-1);
-      const stableBreak = columnBreaks.find(value => lineIndex >= value.minLineIndex - 1 && lineIndex <= value.maxLineIndex + 1 && Math.abs(fragment.rect.left - value.x) <= value.tolerance);
+      const stableBreak = columnBreaks.find(value => Math.abs(fragment.rect.left - value.x) <= value.tolerance);
       if (!previous || stableBreak || fragment.rect.left - previous.right > gapLimit) {
-        lineRuns.push({ lineIndex, fragments: [fragment], left: fragment.rect.left, right: fragment.rect.right, top: fragment.rect.top, bottom: fragment.rect.bottom, columnBreakBefore: Boolean(previous && stableBreak && !stableBreak.softContinuation) });
+        lineRuns.push({ lineIndex, fragments: [fragment], left: fragment.rect.left, right: fragment.rect.right, top: fragment.rect.top, bottom: fragment.rect.bottom, columnBreakBefore: Boolean(previous && stableBreak) });
       } else {
         previous.fragments.push(fragment); previous.left = Math.min(previous.left, fragment.rect.left); previous.right = Math.max(previous.right, fragment.rect.right);
         previous.top = Math.min(previous.top, fragment.rect.top); previous.bottom = Math.max(previous.bottom, fragment.rect.bottom);
@@ -1172,6 +1207,7 @@ function pdfVisualTextLayout(layer) {
     line.runs = lineRuns;
     lineRuns.forEach((run, runIndex) => {
       run.runIndex = runIndex; run.width = run.right - run.left; run.height = run.bottom - run.top;
+      run.columnLane = pdfColumnLaneForRun(run, columnBreaks, bounds);
       run.fragments.forEach((fragment, fragmentIndex) => { fragment.lineIndex = lineIndex; fragment.runIndex = runIndex; fragment.fragmentIndex = fragmentIndex; fragment.run = run; });
       runs.push(run);
     });
@@ -1237,43 +1273,38 @@ function comparePdfVisualEndpoints(a, b) {
 function pdfRunOverlap(a, b) { return Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left)); }
 function pdfVisualSelectionSameColumn(layout, start, end) {
   if (start.run === end.run) return true;
-  const overlap = pdfRunOverlap(start.run, end.run);
-  if (overlap >= Math.min(start.run.width, end.run.width) * .08) return true;
-  // A same-column paragraph may have a small hanging/first-line indent. The
-  // previous page-width based fallback treated the gutter as an indent on
-  // two-column papers, which selected both columns at once.
-  const indentTolerance = Math.max(6, Math.min(24, Math.max(start.run.height, end.run.height) * 1.8));
-  if (Math.abs(start.run.left - end.run.left) <= indentTolerance) return true;
-  const left = Math.min(start.run.left, end.run.left); const right = Math.max(start.run.left, end.run.left);
-  const crossedBreaks = layout.columnBreaks.filter(value => value.x > left + value.tolerance && value.x <= right + value.tolerance);
-  return Boolean(crossedBreaks.length && crossedBreaks.every(value => value.softContinuation));
+  // Once a repeated visual column boundary is known, lane identity is the
+  // authoritative signal. Text-layer rectangles often overlap at a narrow
+  // gutter, so rectangle overlap must never be used to join different lanes.
+  if (layout.columnBreaks.length) return start.run.columnLane === end.run.columnLane;
+  // Without a repeated page-level boundary there is no trustworthy evidence
+  // of separate columns. Treat visual runs as one reading stream so split
+  // PDF text nodes on a single line remain selectable end to end.
+  return true;
 }
 function pdfVisualColumnClip(layout, start, end) {
-  const firstLine = Math.min(start.run.lineIndex, end.run.lineIndex); const lastLine = Math.max(start.run.lineIndex, end.run.lineIndex);
-  const breaks = layout.columnBreaks.filter(value => !value.softContinuation && value.maxLineIndex >= firstLine && value.minLineIndex <= lastLine).sort((a, b) => a.x - b.x);
+  const breaks = layout.columnBreaks;
   if (!breaks.length) return { left: layout.bounds.left, right: layout.bounds.right };
-  const referenceLeft = (start.run.left + end.run.left) / 2;
-  let left = layout.bounds.left; let right = layout.bounds.right;
-  for (const value of breaks) {
-    if (referenceLeft >= value.x - value.tolerance) left = Math.max(left, value.x + 1);
-    else { right = Math.min(right, value.x - 1); break; }
-  }
-  return { left, right };
+  const lane = start.run.columnLane;
+  if (lane === null) return { left: layout.bounds.left, right: layout.bounds.right };
+  return {
+    left: lane > 0 ? breaks[Math.min(lane - 1, breaks.length - 1)].x : layout.bounds.left,
+    right: lane < breaks.length ? breaks[lane].x : layout.bounds.right
+  };
 }
 function pdfClampClientRect(rect, clip) {
   const left = Math.max(rect.left, clip.left); const right = Math.min(rect.right, clip.right);
   if (right - left <= .15) return null;
   return { left, right, top: rect.top, bottom: rect.bottom, width: right - left, height: rect.height };
 }
-function pdfSelectedRunsForLine(line, band, startRun, endRun) {
-  const continuationTolerance = Math.min(7, Math.max(3, line.typicalHeight * .45));
+function pdfSelectedRunsForLine(line, startRun, endRun, columnLane, laneAware) {
   return line.runs.filter(run => {
     if (run.lineIndex === startRun.lineIndex && run.runIndex < startRun.runIndex) return false;
     if (run.lineIndex === endRun.lineIndex && run.runIndex > endRun.runIndex) return false;
-    if (run === startRun || run === endRun) return true;
-    const overlap = Math.max(0, Math.min(run.right, band.right) - Math.max(run.left, band.left));
-    const adjacentContinuation = !run.columnBreakBefore && run.left > band.right && run.left - band.right <= continuationTolerance;
-    return overlap > Math.min(run.width, band.right - band.left) * .06 || adjacentContinuation;
+    // In a detected multi-column layout, select every fragment in the chosen
+    // lane and none from adjacent lanes. Without a column boundary, all runs
+    // on the visual line belong to the same reading stream.
+    return !laneAware || run.columnLane === columnLane;
   });
 }
 function pdfRangeRectForFragment(fragment, start, end) {
@@ -1298,11 +1329,11 @@ function pdfVisualSelectionFromEndpoints(layout, start, end) {
   const startRun = start.run; const endRun = end.run;
   if (!pdfVisualSelectionSameColumn(layout, start, end)) return { error: '选区跨越了不同分栏，请分别选择每一栏' };
   const columnClip = pdfVisualColumnClip(layout, start, end);
-  const band = { left: Math.min(startRun.left, endRun.left), right: Math.max(startRun.right, endRun.right) };
+  const laneAware = layout.columnBreaks.length > 0; const columnLane = startRun.columnLane;
   const selectedRuns = [];
   for (let lineIndex = startRun.lineIndex; lineIndex <= endRun.lineIndex; lineIndex += 1) {
     const line = layout.lines[lineIndex];
-    selectedRuns.push(...pdfSelectedRunsForLine(line, band, startRun, endRun));
+    selectedRuns.push(...pdfSelectedRunsForLine(line, startRun, endRun, columnLane, laneAware));
   }
   const pieces = []; const clientRects = [];
   selectedRuns.forEach((run, selectedRunIndex) => {
@@ -1319,7 +1350,7 @@ function pdfVisualSelectionFromEndpoints(layout, start, end) {
     }
   });
   const text = pdfVisualSelectionText(pieces);
-  const rects = mergePdfSelectionRects(clientRects, layout.bounds);
+  const rects = mergePdfSelectionRects(clientRects, layout.bounds, columnClip);
   if (!text || !rects.length) return { error: '请拖选至少一个完整字符' };
   return { page: Number(layout.layer.closest('[data-pdf-page-stack]')?.dataset.page), text: text.slice(0, 2000), rects };
 }
@@ -1358,11 +1389,25 @@ function pdfSelectionClientRect(selection, layer) {
 }
 function clearPdfBrowseSelection() {
   const value = state.pdfBrowseSelection; if (!value) return false;
-  value.previewNodes?.forEach(node => node.remove()); state.pdfBrowseSelection = null; return true;
+  value.previewNodes?.forEach(node => node.remove());
+  if (state.pdfSelection === value.selection) state.pdfSelection = null;
+  state.pdfBrowseSelection = null;
+  if (!state.pdfAnnotationMode && el('pdf-modal')?.classList.contains('open')) el('pdf-tool-status').textContent = '浏览模式 · 拖选文字后可翻译、复制或标注';
+  return true;
+}
+function pdfDraftPointInLayout(draft, event) {
+  const currentBounds = draft.layer.getBoundingClientRect();
+  // Tool/status text, responsive wrapping and scroll anchoring may move the
+  // page while the pointer is held down. Convert the current viewport point
+  // back into the immutable coordinate space captured on pointerdown.
+  return {
+    x: event.clientX + draft.layout.bounds.left - currentBounds.left,
+    y: event.clientY + draft.layout.bounds.top - currentBounds.top
+  };
 }
 function updatePdfTextSelectionDraft(event) {
   const draft = state.pdfTextSelectionDraft; if (!draft || draft.pointerId !== event.pointerId) return null;
-  draft.endPoint = { x: event.clientX, y: event.clientY };
+  draft.endPoint = pdfDraftPointInLayout(draft, event);
   draft.selection = pdfVisualSelectionFromPoints(draft.layout, draft.startPoint, draft.endPoint, draft.startEndpoint);
   renderPdfTextSelectionPreview(draft, draft.selection);
   return draft.selection;
@@ -1412,7 +1457,7 @@ async function addPdfSelectionAnnotation(type, capturedSelection = state.pdfSele
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
   };
   state.pdfRecord.annotations.push(annotation); state.pdfAnnotationHistory.push(annotation.id);
-  state.pdfSelection = null; window.getSelection()?.removeAllRanges();
+  closeTranslationPopover(); clearPdfBrowseSelection(); state.pdfSelection = null; window.getSelection()?.removeAllRanges();
   await persistPdfRecord(); renderPdfAnnotationLayerForCurrentPage(); renderPdfAnnotationList(annotation.id); toast(`${annotationTypeLabel(type)}已保存`);
 }
 function renderPdfAnnotationLayerForPage(pageNumber = state.pdfPage) {
@@ -1430,26 +1475,35 @@ function updatePdfAnnotationMode() {
   document.querySelectorAll('[data-pdf-page-stack]').forEach(stack => stack.classList.toggle('annotation-select', Boolean(pdfSelectionToolType())));
   document.querySelectorAll('.pdf-annotation-layer').forEach(layer => layer.classList.toggle('drawing', ['area', 'area-note'].includes(state.pdfAnnotationMode)));
   const labels = { highlight: '高亮工具 H · 拖选后自动保存', underline: '下划线工具 U · 拖选后自动保存', note: '文字批注 N · 拖选后填写批注', area: '区域工具 R · 拖出矩形', 'area-note': '区域批注 Shift+N · 拖出矩形' };
-  el('pdf-tool-status').textContent = labels[state.pdfAnnotationMode] || '浏览模式 · 选中文字可翻译';
+  const selected = state.pdfBrowseSelection?.selection;
+  el('pdf-tool-status').textContent = labels[state.pdfAnnotationMode] || (selected ? `已选择 ${selected.text.length} 字 · H 高亮 / U 下划线 / N 批注 / Ctrl+C 复制 / Esc 取消` : '浏览模式 · 拖选文字后可翻译、复制或标注');
   clearTimeout(state.translationSelectionTimer);
   if (state.pdfAnnotationMode) closeTranslationPopover();
 }
 function setPdfAnnotationMode(mode) {
-  discardPdfTextSelectionDraft();
+  discardPdfTextSelectionDraft(); clearPdfBrowseSelection();
   state.pdfAnnotationMode = state.pdfAnnotationMode === mode ? null : mode;
   state.pdfSelection = null; window.getSelection()?.removeAllRanges();
   updatePdfAnnotationMode();
 }
+async function applyOrTogglePdfAnnotationTool(mode) {
+  if (['highlight', 'underline', 'note'].includes(mode) && state.pdfSelection?.rects?.length) {
+    state.pdfAnnotationMode = null; updatePdfAnnotationMode();
+    await addPdfSelectionAnnotation(mode, state.pdfSelection);
+    return;
+  }
+  setPdfAnnotationMode(mode);
+}
 function cancelPdfAnnotationInteraction({ quiet = false } = {}) {
-  const hadAnnotation = Boolean(state.pdfAnnotationMode || state.pdfAnnotationDraft || state.pdfTextSelectionDraft || state.pdfSelection);
-  const hadInteraction = Boolean(hadAnnotation || state.pdfBrowseSelection);
+  const hadAnnotation = Boolean(state.pdfAnnotationMode || state.pdfAnnotationDraft || (state.pdfTextSelectionDraft && !state.pdfTextSelectionDraft.browseMode));
+  const hadInteraction = Boolean(hadAnnotation || state.pdfTextSelectionDraft || state.pdfSelection || state.pdfBrowseSelection);
   discardPdfTextSelectionDraft();
   const draft = state.pdfAnnotationDraft;
   if (draft) {
     try { draft.layer?.releasePointerCapture(draft.pointerId); } catch {}
     draft.draft?.remove(); state.pdfAnnotationDraft = null;
   }
-  state.pdfAnnotationMode = null; state.pdfSelection = null; window.getSelection()?.removeAllRanges();
+  state.pdfAnnotationMode = null; clearPdfBrowseSelection(); state.pdfSelection = null; window.getSelection()?.removeAllRanges();
   closeTranslationPopover(); updatePdfAnnotationMode();
   if (hadAnnotation && !quiet) toast('已取消当前标注工具');
   return hadInteraction;
@@ -2180,7 +2234,7 @@ function setupTranslationDragging() {
 }
 function closeTranslationPopover() {
   const popover = el('translation-popover'); if (!popover) return;
-  popover.classList.remove('open'); state.translationRequestId += 1; state.translationPayload = null; clearPdfBrowseSelection();
+  popover.classList.remove('open'); state.translationRequestId += 1; state.translationPayload = null;
 }
 function setTranslationActions(enabled) {
   el('translation-prepare-inline').classList.add('hidden');
@@ -2610,7 +2664,7 @@ el('pdf-copy-page').addEventListener('click', () => copyText(state.pdfRecord?.pa
 el('pdf-reparse').addEventListener('click', reparsePdfText);
 el('pdf-ocr-page').addEventListener('click', ocrCurrentPdfPage);
 el('pdf-ocr-missing').addEventListener('click', ocrMissingPdfPages);
-document.querySelectorAll('[data-pdf-tool]').forEach(button => button.addEventListener('click', () => setPdfAnnotationMode(button.dataset.pdfTool)));
+document.querySelectorAll('[data-pdf-tool]').forEach(button => button.addEventListener('click', () => applyOrTogglePdfAnnotationTool(button.dataset.pdfTool)));
 el('pdf-cancel-annotation').addEventListener('click', () => cancelPdfAnnotationInteraction());
 el('pdf-undo-annotation').addEventListener('click', undoPdfAnnotation);
 el('pdf-export-annotated').addEventListener('click', exportAnnotatedPdf);
@@ -2619,7 +2673,9 @@ el('pdf-import-annotations').addEventListener('click', () => el('pdf-annotations
 el('pdf-annotations-file').addEventListener('change', async event => { const [file] = event.target.files; if (file) await importPdfAnnotationsFile(file); event.target.value = ''; });
 el('pdf-pages-container').addEventListener('pointerdown', event => {
   const mode = pdfSelectionToolType(); const layer = event.target.closest('.textLayer');
-  const browseMode = !mode && event.pointerType !== 'touch' && translationSettings.enabled && translationSettings.selection;
+  // Desktop PDF dragging always uses visual geometry. Tying this to the
+  // translation switch previously re-enabled the broken native Range path.
+  const browseMode = !mode && event.pointerType !== 'touch';
   if ((!mode && !browseMode) || !layer || event.button !== 0) return;
   const stack = layer.closest('[data-pdf-page-stack]'); const pageNumber = Number(stack?.dataset.page);
   if (!pageNumber) return;
@@ -2641,7 +2697,8 @@ el('pdf-pages-container').addEventListener('pointermove', event => {
   const draft = state.pdfTextSelectionDraft;
   if (!draft || draft.pointerId !== event.pointerId) return;
   event.preventDefault();
-  const distance = Math.hypot(event.clientX - draft.startPoint.x, event.clientY - draft.startPoint.y);
+  const point = pdfDraftPointInLayout(draft, event);
+  const distance = Math.hypot(point.x - draft.startPoint.x, point.y - draft.startPoint.y);
   if (draft.browseMode && distance < 3) return;
   draft.dragging = true; updatePdfTextSelectionDraft(event);
 });
@@ -2654,12 +2711,15 @@ el('pdf-pages-container').addEventListener('pointerup', async event => {
   if (draft.browseMode) {
     const previewNodes = draft.previewNodes || []; draft.previewNodes = [];
     discardPdfTextSelectionDraft();
-    if (selection?.error) { previewNodes.forEach(node => node.remove()); return toast(selection.error); }
-    if (selection.text.length > 2000) { previewNodes.forEach(node => node.remove()); return toast('单次翻译最多 2,000 个字符'); }
-    state.pdfBrowseSelection = { ...selection, previewNodes, layer: draft.layer };
+    if (selection?.error) { previewNodes.forEach(node => node.remove()); state.pdfSelection = null; return toast(selection.error); }
+    state.pdfSelection = selection;
+    state.pdfBrowseSelection = { selection, previewNodes, layer: draft.layer };
     state.pdfSuppressWordClick = true; setTimeout(() => { state.pdfSuppressWordClick = false; }, 80);
-    updatePdfCurrentPage(pageNumber);
-    await showTranslation(selection.text, pdfSelectionClientRect(selection, draft.layer), draft.layer, 'selection');
+    updatePdfCurrentPage(pageNumber); updatePdfAnnotationMode();
+    if (translationSettings.enabled && translationSettings.selection) {
+      if (selection.text.length > 2000) return toast('单次翻译最多 2,000 个字符');
+      await showTranslation(selection.text, pdfSelectionClientRect(selection, draft.layer), draft.layer, 'selection');
+    }
     return;
   }
   discardPdfTextSelectionDraft();
@@ -2774,13 +2834,16 @@ document.querySelectorAll('.modal').forEach(modal => modal.addEventListener('cli
 document.addEventListener('keydown', event => {
   const target = event.target; const editing = target?.matches?.('input,textarea,select,[contenteditable="true"]');
   const pdfOpen = el('pdf-modal').classList.contains('open');
+  if (pdfOpen && (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'c' && !editing && state.pdfBrowseSelection?.selection?.text) {
+    event.preventDefault(); copyText(state.pdfBrowseSelection.selection.text, '所选 PDF 文字已复制'); return;
+  }
   if (pdfOpen && (event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === 'z' && !editing) {
     event.preventDefault(); undoPdfAnnotation(); return;
   }
   if (pdfOpen && !editing && !event.ctrlKey && !event.metaKey && !event.altKey) {
     const key = event.key.toLowerCase();
     const tool = event.shiftKey && key === 'n' ? 'area-note' : ({ h: 'highlight', u: 'underline', n: 'note', r: 'area' })[key];
-    if (tool) { event.preventDefault(); setPdfAnnotationMode(tool); return; }
+    if (tool) { event.preventDefault(); applyOrTogglePdfAnnotationTool(tool); return; }
     if (event.key === 'PageUp' && state.pdfPage > 1) { event.preventDefault(); goToPdfPage(state.pdfPage - 1); return; }
     if (event.key === 'PageDown' && state.pdfDocument && state.pdfPage < state.pdfDocument.numPages) { event.preventDefault(); goToPdfPage(state.pdfPage + 1); return; }
   }
