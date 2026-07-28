@@ -1,4 +1,4 @@
-const APP_VERSION = '6.1.0';
+const APP_VERSION = '6.2.0';
 const STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
 const LEGACY_SAVED_KEY = 'paperscope-saved';
@@ -50,7 +50,9 @@ const state = {
   translationRequestId: 0, translationSelectionTimer: null, translationPayload: null, lastSelectionKey: '',
   dictionaryManifest: null, dictionaryDomain: null, dictionaryShards: new Map(), dictionaryDownloadController: null,
   translationDrag: null,
-  pdfModule: null, pdfLoadingTask: null, pdfDocument: null, pdfRecord: null, pdfPaperId: null, pdfPage: 1, pdfScale: 1.15, pdfRenderTask: null,
+  pdfModule: null, pdfLibModule: null, tesseractModule: null, ocrWorker: null,
+  pdfLoadingTask: null, pdfDocument: null, pdfRecord: null, pdfPaperId: null, pdfPage: 1, pdfScale: 1.4, pdfRenderTask: null,
+  pdfTextContent: null, pdfSelection: null, pdfAnnotationMode: null, pdfAnnotationDraft: null, pdfAnnotationHistory: [], libraryPdfMatches: null,
   lineageRequestId: 0,
   serviceWorkerRegistration: null, updateReloading: false
 };
@@ -117,7 +119,11 @@ function setQuery(patch, replace = false) {
   const route = parseRoute(); navigate(route.path, { ...route.query, ...patch }, replace);
 }
 function allPapers() { return [...(state.datasets.ai?.items || []), ...(state.datasets.architecture?.items || [])]; }
-function getPaper(id) { return allPapers().find(item => item.id === id) || library.records[id]?.paper || null; }
+function getPaper(id) {
+  const base = allPapers().find(item => item.id === id) || library.records[id]?.paper || null;
+  const overrides = library.records[id]?.metadataOverrides;
+  return base && overrides ? { ...base, ...overrides } : base;
+}
 function getRecord(id) { return library.records[id] || null; }
 function snapshotPaper(paper) {
   return { id: paper.id, arxivId: paper.arxivId || null, arxivUrl: paper.arxivUrl || null, title: paper.title, abstract: paper.abstract || '', authors: paper.authors || [], published: paper.published || null, updated: paper.updated || null, venue: paper.venue || '', venueName: paper.venueName || null, venueYear: paper.venueYear || null, venueType: paper.venueType || null, track: paper.track || '', officialUrl: paper.officialUrl || null, link: safeUrl(paper.link), source: paper.source || '', kind: paper.kind || 'preprint', doi: paper.doi || null, journalRef: paper.journalRef || null, citationCount: Number(paper.citationCount || 0), qualityScore: Number(paper.qualityScore || 0), quality: paper.quality || null, area: paper.area || 'ai', publication: paper.publication || null };
@@ -129,7 +135,7 @@ function ensureRecord(paper) {
     lastOpenedAt: old.lastOpenedAt || null, progress: Number(old.progress || 0), note: old.note || '', tags: Array.isArray(old.tags) ? old.tags : [],
     highlights: Array.isArray(old.highlights) ? old.highlights : [], collections: Array.isArray(old.collections) ? old.collections : [],
     publication: old.publication || paper.publication || null, abstractTranslation: old.abstractTranslation || null,
-    pdfAttachment: old.pdfAttachment || null, lineage: old.lineage || null
+    pdfAttachment: old.pdfAttachment || null, lineage: old.lineage || null, metadataOverrides: old.metadataOverrides || null
   };
   return library.records[paper.id];
 }
@@ -309,34 +315,64 @@ function renderProfile() {
   el('profile-name-display').textContent = profile.name; el('profile-focus-display').textContent = profile.focus || '尚未填写研究方向';
   el('profile-name').value = profile.name; el('profile-focus').value = profile.focus || ''; el('profile-bio').value = profile.bio || '';
 }
-function libraryRecords(tab, collectionId, q) {
-  return Object.entries(library.records).filter(([, record]) => record?.paper).filter(([, record]) => {
-    if (q && !`${record.paper.title} ${record.note} ${(record.tags || []).join(' ')}`.toLowerCase().includes(q.toLowerCase())) return false;
+function duplicateRecordKey(record) {
+  const doi = String(record?.paper?.doi || record?.metadataOverrides?.doi || '').trim().toLowerCase();
+  if (doi) return `doi:${doi}`;
+  const title = normalizedAuthor(record?.metadataOverrides?.title || record?.paper?.title || '').replace(/\s+/g, ' ');
+  return title.length >= 18 ? `title:${title}` : null;
+}
+function duplicateRecordIds() {
+  const groups = new Map();
+  for (const [id, record] of Object.entries(library.records)) {
+    if (!record?.paper) continue; const key = duplicateRecordKey(record); if (!key) continue;
+    if (!groups.has(key)) groups.set(key, []); groups.get(key).push(id);
+  }
+  return new Set([...groups.values()].filter(ids => ids.length > 1).flat());
+}
+function libraryRecords(tab, collectionId, q, smart = 'unread') {
+  const duplicates = tab === 'duplicates' ? duplicateRecordIds() : null;
+  return Object.entries(library.records).filter(([, record]) => record?.paper).filter(([id, record]) => {
+    const paper = { ...record.paper, ...(record.metadataOverrides || {}) };
+    if (q && !`${paper.title} ${(paper.authors || []).join(' ')} ${paper.venue || ''} ${paper.doi || ''} ${record.note} ${(record.tags || []).join(' ')}`.toLowerCase().includes(q.toLowerCase())) return false;
+    if (tab === 'all') return true;
     if (tab === 'saved') return Boolean(record.savedAt);
     if (tab === 'queue') return Boolean(record.queueAt);
     if (tab === 'recent') return Boolean(record.lastOpenedAt);
-    if (tab === 'notes') return Boolean(record.note || record.highlights?.length);
+    if (tab === 'notes') return Boolean(record.note || record.highlights?.length || record.pdfAttachment?.annotationCount);
     if (tab === 'published') return Boolean(record.savedAt && publicationInfo(record, record.paper).status === 'published');
     if (tab === 'collections') return collectionId && collectionId !== 'all' ? record.collections?.includes(collectionId) : Boolean(record.collections?.length);
+    if (tab === 'unfiled') return Boolean((record.savedAt || record.pdfAttachment) && !record.collections?.length);
+    if (tab === 'duplicates') return duplicates.has(id);
+    if (tab === 'smart') {
+      if (smart === 'has-pdf') return Boolean(record.pdfAttachment);
+      if (smart === 'annotated') return Boolean(record.pdfAttachment?.annotationCount || record.highlights?.length);
+      if (smart === 'recent-add') return Date.now() - new Date(record.savedAt || record.pdfAttachment?.importedAt || 0).getTime() <= 7 * 86400_000;
+      if (smart === 'needs-metadata') return !paper.title || !(paper.authors || []).length || (!paper.doi && !paper.arxivId);
+      if (smart === 'pdf-search') return Boolean(state.libraryPdfMatches?.has(id));
+      return !record.readAt && Number(record.progress || 0) < 100;
+    }
     return true;
   }).sort(([, a], [, b]) => new Date(b.queueAt || b.savedAt || b.lastOpenedAt || b.readAt || 0) - new Date(a.queueAt || a.savedAt || a.lastOpenedAt || a.readAt || 0));
 }
 function renderLibraryPage(route) {
-  renderProfile(); const tab = route.parts[1] || 'saved'; const q = route.query.q || ''; const collectionId = route.query.collection || 'all'; const page = Math.max(1, Number(route.query.page || 1));
+  renderProfile(); const tab = route.parts[1] || 'saved'; const q = route.query.q || ''; const collectionId = route.query.collection || 'all'; const smart = route.query.smart || 'unread'; const page = Math.max(1, Number(route.query.page || 1));
   const stats = libraryStats(); for (const [name, value] of Object.entries(stats)) el(`stat-${name}`).textContent = value;
   document.querySelectorAll('#library-tabs [data-tab]').forEach(button => button.classList.toggle('active', button.dataset.tab === tab));
   el('library-batchbar').classList.toggle('hidden', ['vocabulary', 'translations'].includes(tab));
   el('collection-tools').classList.toggle('hidden', tab !== 'collections'); renderCollectionOptions(collectionId);
+  el('smart-tools').classList.toggle('hidden', tab !== 'smart'); el('smart-filter').value = smart;
+  if (tab === 'smart' && route.query.pdfq) el('library-pdf-search').value = route.query.pdfq;
+  el('merge-duplicates').classList.toggle('hidden', tab !== 'duplicates');
   if (tab === 'vocabulary') return renderVocabularyPage(route);
   if (tab === 'translations') return renderTranslationHistoryPage(route);
-  const records = libraryRecords(tab, collectionId, q); const total = Math.max(1, Math.ceil(records.length / 10)); const safePage = Math.min(page, total); const pageRecords = records.slice((safePage - 1) * 10, safePage * 10);
+  const records = libraryRecords(tab, collectionId, q, smart); const total = Math.max(1, Math.ceil(records.length / 10)); const safePage = Math.min(page, total); const pageRecords = records.slice((safePage - 1) * 10, safePage * 10);
   state.batch.clear(); updateBatchCount(); el('library-select-all').checked = false;
   el('library-list').innerHTML = pageRecords.length ? pageRecords.map(([id, record]) => libraryRow(id, record)).join('') : '<div class="empty">当前分类还没有论文。</div>';
   renderPagination('library-pagination', safePage, total, next => navigate(`library/${tab}`, { ...route.query, page: next }));
 }
 function libraryRow(id, record) {
-  const info = publicationInfo(record, record.paper); const names = (record.collections || []).map(collectionId => library.collections[collectionId]?.name).filter(Boolean);
-  return `<article class="library-row" data-library-id="${escapeHtml(id)}"><input class="check" type="checkbox" data-library-select aria-label="选择论文"><div><h3>${escapeHtml(record.paper.title)}</h3><p data-translatable>${escapeHtml(record.note || record.paper.abstract || '')}</p><div class="tag-row"><span class="tag ${record.paper.area === 'architecture' ? 'arch' : ''}">${record.paper.area === 'architecture' ? '体系结构' : 'AI'}</span><span class="tag">进度 ${record.progress || 0}%</span>${record.pdfAttachment ? `<span class="tag published">本地 PDF · ${record.pdfAttachment.pageCount} 页</span>` : ''}${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${names.map(name => `<span class="tag"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="paper-actions">${record.pdfAttachment ? '<button data-library-action="pdf">阅读 PDF</button>' : ''}<button data-library-action="compare">对比</button><button data-library-action="open">查看</button><button data-library-action="save" class="${record.savedAt ? 'saved' : ''}">${record.savedAt ? '★' : '☆'}</button></div></article>`;
+  const paper = getPaper(id) || record.paper; const info = publicationInfo(record, paper); const names = (record.collections || []).map(collectionId => library.collections[collectionId]?.name).filter(Boolean);
+  return `<article class="library-row" data-library-id="${escapeHtml(id)}"><input class="check" type="checkbox" data-library-select aria-label="选择论文"><div><h3>${escapeHtml(paper.title)}</h3><p data-translatable>${escapeHtml(record.note || paper.abstract || '')}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span><span class="tag">进度 ${record.progress || 0}%</span>${record.pdfAttachment ? `<span class="tag published">本地 PDF · ${record.pdfAttachment.pageCount} 页</span>` : ''}${record.pdfAttachment?.annotationCount ? `<span class="tag note">${record.pdfAttachment.annotationCount} 条 PDF 标注</span>` : ''}${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${(record.tags || []).slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}${names.map(name => `<span class="tag"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="paper-actions">${record.pdfAttachment ? '<button data-library-action="pdf">阅读 PDF</button>' : ''}<button data-library-action="compare">对比</button><button data-library-action="open">查看</button><button data-library-action="save" class="${record.savedAt ? 'saved' : ''}">${record.savedAt ? '★' : '☆'}</button></div></article>`;
 }
 function renderVocabularyPage(route) {
   const q = (route.query.q || '').trim().toLowerCase(); const page = Math.max(1, Number(route.query.page || 1));
@@ -366,9 +402,55 @@ function exportVocabulary() {
   downloadText('paperscope-vocabulary.csv', `\uFEFF${csv}`, 'text/csv;charset=utf-8');
 }
 function renderCollectionOptions(selected) {
-  const options = Object.entries(library.collections).map(([id, collection]) => `<option value="${escapeHtml(id)}">${escapeHtml(collection.name)}</option>`).join('');
+  const entries = Object.entries(library.collections);
+  const children = new Map();
+  for (const entry of entries) {
+    const parent = entry[1].parentId && library.collections[entry[1].parentId] ? entry[1].parentId : '';
+    if (!children.has(parent)) children.set(parent, []); children.get(parent).push(entry);
+  }
+  for (const values of children.values()) values.sort((a, b) => a[1].name.localeCompare(b[1].name, 'zh-CN'));
+  const ordered = []; const visit = (parentId, depth) => {
+    for (const [id, collection] of children.get(parentId) || []) { ordered.push([id, collection, depth]); visit(id, depth + 1); }
+  }; visit('', 0);
+  const options = ordered.map(([id, collection, depth]) => `<option value="${escapeHtml(id)}">${'　'.repeat(depth)}${depth ? '↳ ' : ''}${escapeHtml(collection.name)}</option>`).join('');
   if (selected !== undefined) { el('collection-filter').innerHTML = `<option value="all">全部专题</option>${options}`; el('collection-filter').value = selected || 'all'; }
   el('paper-collection').innerHTML = `<option value="">选择专题收藏</option>${options}`;
+  el('collection-parent').innerHTML = `<option value="">顶层专题</option>${options}`;
+}
+async function searchLocalPdfLibrary() {
+  const query = el('library-pdf-search').value.trim().toLowerCase(); if (query.length < 2) return toast('请输入至少 2 个字符');
+  const button = el('library-pdf-search-button'); button.disabled = true; button.textContent = '检索中…'; const matches = new Set();
+  try {
+    const entries = Object.entries(library.records).filter(([, record]) => record.pdfAttachment);
+    for (const [id] of entries) {
+      const stored = await getStoredPdf(id).catch(() => null);
+      if ((stored?.pages || []).some(text => String(text).toLowerCase().includes(query))) matches.add(id);
+    }
+    state.libraryPdfMatches = matches; navigate('library/smart', { smart: 'pdf-search', pdfq: query, page: 1 }); toast(`PDF 全文找到 ${matches.size} 篇`);
+  } finally { button.disabled = false; button.textContent = '全文检索'; }
+}
+async function mergeSelectedDuplicates() {
+  const ids = [...state.batch]; if (ids.length < 2) return toast('请至少选择 2 条重复记录');
+  const keys = new Set(ids.map(id => duplicateRecordKey(getRecord(id))).filter(Boolean));
+  if (keys.size > 1 && !confirm('所选记录的 DOI/标题并不完全相同，仍要合并吗？')) return;
+  const targetId = ids[0]; const target = ensureRecord(getPaper(targetId));
+  for (const sourceId of ids.slice(1)) {
+    const source = getRecord(sourceId); if (!source) continue;
+    target.savedAt ||= source.savedAt; target.queueAt ||= source.queueAt; target.readAt ||= source.readAt; target.lastOpenedAt ||= source.lastOpenedAt;
+    target.progress = Math.max(Number(target.progress || 0), Number(source.progress || 0));
+    target.tags = [...new Set([...(target.tags || []), ...(source.tags || [])])];
+    target.collections = [...new Set([...(target.collections || []), ...(source.collections || [])])];
+    target.highlights = [...(target.highlights || []), ...(source.highlights || []).filter(item => !(target.highlights || []).some(old => old.id === item.id))];
+    target.note = [target.note, source.note].filter(Boolean).filter((value, index, values) => values.indexOf(value) === index).join('\n\n');
+    target.publication ||= source.publication; target.abstractTranslation ||= source.abstractTranslation; target.lineage ||= source.lineage;
+    if (!target.pdfAttachment && source.pdfAttachment) {
+      const stored = await getStoredPdf(sourceId).catch(() => null);
+      if (stored) { stored.paperId = targetId; await putStoredPdf(stored); target.pdfAttachment = pdfAttachmentMeta(stored, source.pdfAttachment); }
+    }
+    await deleteStoredPdf(sourceId).catch(() => {});
+    delete library.records[sourceId];
+  }
+  state.batch = new Set([targetId]); saveLibrary(); renderRoute(); toast(`已合并 ${ids.length} 条重复记录`);
 }
 function updateBatchCount() { el('batch-count').textContent = `${state.batch.size} 项已选`; }
 
@@ -432,6 +514,30 @@ function renderHighlights() {
   const paper = getPaper(state.selectedPaperId); const record = getRecord(state.selectedPaperId); if (!paper) return;
   el('detail-abstract').innerHTML = highlightedAbstract(paper.abstract || '', record?.highlights || []);
   el('highlight-list').innerHTML = record?.highlights?.length ? record.highlights.map(item => `<div class="highlight" style="border-color:${escapeHtml(item.color)}"><button data-highlight-remove="${escapeHtml(item.id)}">×</button>${escapeHtml(item.text)}</div>`).join('') : '<div class="mono" style="margin-top:7px">暂无标注</div>';
+}
+function openMetadataEditor() {
+  const paper = getPaper(state.selectedPaperId); if (!paper) return;
+  el('metadata-title').value = paper.title || '';
+  el('metadata-authors').value = (paper.authors || []).join('\n');
+  el('metadata-date').value = paper.published ? new Date(paper.published).toISOString().slice(0, 10) : '';
+  el('metadata-venue').value = paper.venueName || paper.venue || '';
+  el('metadata-doi').value = paper.doi || '';
+  el('metadata-url').value = paper.link || '';
+  el('metadata-modal').classList.add('open');
+}
+function saveMetadataEditor() {
+  const record = ensureRecord(getPaper(state.selectedPaperId)); if (!record) return;
+  const title = el('metadata-title').value.trim(); if (!title) return toast('标题不能为空');
+  const authors = el('metadata-authors').value.split(/\r?\n|[;；]/).map(value => value.trim()).filter(Boolean);
+  const date = el('metadata-date').value;
+  record.metadataOverrides = {
+    ...(record.metadataOverrides || {}), title, authors,
+    published: date ? new Date(`${date}T00:00:00Z`).toISOString() : record.paper.published,
+    venue: el('metadata-venue').value.trim(), venueName: el('metadata-venue').value.trim() || null,
+    doi: el('metadata-doi').value.trim().replace(/^https?:\/\/doi\.org\//i, '') || null,
+    link: safeUrl(el('metadata-url').value.trim())
+  };
+  saveLibrary(); closeModal('metadata-modal'); openDrawer(state.selectedPaperId); toast('论文元数据已更新');
 }
 function currentDetailSequence() {
   const paper = getPaper(state.selectedPaperId); if (!paper) return [];
@@ -504,26 +610,76 @@ async function loadPdfModule() {
   state.pdfModule = module;
   return module;
 }
+async function loadPdfLibModule() {
+  if (!state.pdfLibModule) state.pdfLibModule = await import(`./vendor/pdf-lib/pdf-lib.mjs?v=${APP_VERSION}`);
+  return state.pdfLibModule;
+}
+async function loadTesseractModule() {
+  if (!state.tesseractModule) state.tesseractModule = await import(`./vendor/tesseract/tesseract.mjs?v=${APP_VERSION}`);
+  return state.tesseractModule;
+}
 function pdfDocumentOptions(data) {
   return {
     data,
     cMapUrl: new URL('./vendor/pdfjs/cmaps/', location.href).href,
     cMapPacked: true,
     standardFontDataUrl: new URL('./vendor/pdfjs/standard_fonts/', location.href).href,
-    wasmUrl: new URL('./vendor/pdfjs/wasm/', location.href).href
+    wasmUrl: new URL('./vendor/pdfjs/wasm/', location.href).href,
+    useSystemFonts: true,
+    stopAtErrors: false,
+    enableXfa: true
+  };
+}
+function configurePdfPassword(loadingTask) {
+  loadingTask.onPassword = (updatePassword, reason) => {
+    const password = prompt(reason === 1 ? '此 PDF 受密码保护，请输入打开密码：' : '密码不正确，请重新输入：');
+    if (password === null) loadingTask.destroy().catch(() => {});
+    else updatePassword(password);
   };
 }
 function pdfPageText(content) {
-  let text = '';
-  for (const item of content.items || []) {
-    if (!('str' in item)) continue;
-    text += `${item.str}${item.hasEOL ? '\n' : ' '}`;
+  const items = (content.items || []).filter(item => typeof item.str === 'string' && item.str);
+  let text = ''; let last = null;
+  for (const item of items) {
+    const x = Number(item.transform?.[4] || 0); const y = Number(item.transform?.[5] || 0);
+    const height = Math.max(1, Math.hypot(Number(item.transform?.[2] || 0), Number(item.transform?.[3] || 0)));
+    if (last) {
+      const lineChanged = Math.abs(y - last.y) > Math.max(height, last.height) * .7;
+      if (lineChanged && !text.endsWith('\n')) text += '\n';
+      else {
+        const expectedEnd = last.x + Math.max(0, Number(last.width || 0));
+        const gap = x - expectedEnd;
+        if (gap > Math.max(height, last.height) * .12 && !/[\s-]$/.test(text)) text += ' ';
+      }
+    }
+    text += item.str;
+    if (item.hasEOL) text += '\n';
+    last = { x, y, height, width: Number(item.width || 0) };
   }
-  return text.replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
+  return text.normalize('NFC').replace(/\u0000/g, '').replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').replace(/[ \t]{2,}/g, ' ').trim();
+}
+function usefulPdfText(text) {
+  const value = String(text || '').trim();
+  if (value.length < 3) return false;
+  const useful = (value.match(/[\p{L}\p{N}]/gu) || []).length;
+  return useful / value.length >= .12;
+}
+async function extractPdfPageText(page) {
+  const content = await page.getTextContent({ includeMarkedContent: true, disableNormalization: false });
+  const text = pdfPageText(content);
+  return { text: usefulPdfText(text) ? text : '', content, itemCount: (content.items || []).filter(item => typeof item.str === 'string').length };
 }
 function setPdfProgress(value, label) {
   if (el('pdf-progress')) el('pdf-progress').style.width = `${Math.max(0, Math.min(100, value))}%`;
   if (label && el('pdf-status')) el('pdf-status').textContent = label;
+}
+function storedPdfDefaults(stored) {
+  stored.pages ||= Array.from({ length: stored.pageCount || 0 }, () => '');
+  stored.annotations ||= [];
+  stored.ocrPages ||= {};
+  stored.extractionErrors ||= {};
+  stored.schemaVersion ||= 2;
+  return stored;
 }
 async function parseAndStorePdf(file, paperId) {
   if (!file || (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf')) throw new Error('请选择 PDF 文件');
@@ -533,23 +689,29 @@ async function parseAndStorePdf(file, paperId) {
   const pdfjs = await loadPdfModule();
   const bytes = new Uint8Array(await file.arrayBuffer());
   const loadingTask = pdfjs.getDocument(pdfDocumentOptions(bytes));
+  configurePdfPassword(loadingTask);
   const pdf = await loadingTask.promise;
   const metadata = await pdf.getMetadata().catch(() => ({ info: {} }));
-  const pages = [];
+  const pages = []; const extractionErrors = {};
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     setPdfProgress(pageNumber / pdf.numPages * 100, `正在提取第 ${pageNumber}/${pdf.numPages} 页`);
     if (paperId === state.selectedPaperId) el('detail-pdf-status').textContent = `正在提取第 ${pageNumber}/${pdf.numPages} 页`;
     const page = await pdf.getPage(pageNumber);
-    pages.push(pdfPageText(await page.getTextContent()));
-    page.cleanup();
+    try { pages.push((await extractPdfPageText(page)).text); }
+    catch (error) { pages.push(''); extractionErrors[pageNumber] = error.message || '文本层解析失败'; }
+    finally { page.cleanup(); }
   }
   const result = {
+    schemaVersion: 2,
     paperId,
     fileName: file.name,
     size: file.size,
     type: 'application/pdf',
     pageCount: pdf.numPages,
     pages,
+    annotations: [],
+    ocrPages: {},
+    extractionErrors,
     metadata: { title: metadata.info?.Title || '', author: metadata.info?.Author || '', subject: metadata.info?.Subject || '' },
     importedAt: new Date().toISOString(),
     blob: file.slice(0, file.size, 'application/pdf')
@@ -560,18 +722,22 @@ async function parseAndStorePdf(file, paperId) {
   return result;
 }
 function pdfAttachmentMeta(stored, previous = {}) {
+  storedPdfDefaults(stored);
   return {
     fileName: stored.fileName,
     size: stored.size,
     pageCount: stored.pageCount,
     importedAt: stored.importedAt,
     textPages: stored.pages.filter(Boolean).length,
+    ocrPages: Object.keys(stored.ocrPages).length,
+    annotationCount: stored.annotations.length,
+    extractionErrors: Object.keys(stored.extractionErrors).length,
     lastPage: Number(previous.lastPage || 1)
   };
 }
 function renderPdfAttachmentStatus(record) {
   const meta = record?.pdfAttachment;
-  el('detail-pdf-status').textContent = meta ? `${meta.fileName} · ${meta.pageCount} 页 · ${meta.textPages} 页有文本` : '尚未导入 PDF';
+  el('detail-pdf-status').textContent = meta ? `${meta.fileName} · ${meta.pageCount} 页 · ${meta.textPages} 页有文本 · ${meta.annotationCount || 0} 条标注${meta.ocrPages ? ` · OCR ${meta.ocrPages} 页` : ''}` : '尚未导入 PDF';
   el('detail-pdf-import').textContent = meta ? '替换 PDF' : '导入 PDF';
   for (const id of ['detail-pdf-open', 'detail-pdf-download', 'detail-pdf-remove']) el(id).classList.toggle('hidden', !meta);
 }
@@ -594,12 +760,15 @@ async function importStandalonePdf(file) {
   try {
     toast('正在解析本地 PDF…');
     const stored = await parseAndStorePdf(file, id);
-    const title = stored.metadata.title.trim() || file.name.replace(/\.pdf$/i, '');
-    const authors = stored.metadata.author.split(/\s*(?:;|,| and )\s*/i).map(value => value.trim()).filter(Boolean);
+    const rawTitle = stored.metadata.title.trim(); const firstLine = stored.pages.find(Boolean)?.split(/\r?\n/).map(value => value.trim()).find(value => value.length >= 8 && value.length <= 220);
+    const title = rawTitle && !/^(untitled|document|unknown)$/i.test(rawTitle) ? rawTitle : firstLine || file.name.replace(/\.pdf$/i, '');
+    const rawAuthor = stored.metadata.author.trim();
+    const authors = /^(anonymous|unknown)$/i.test(rawAuthor) ? [] : rawAuthor.split(/\s*(?:;|,| and )\s*/i).map(value => value.trim()).filter(Boolean);
     const excerpt = stored.pages.find(Boolean)?.replace(/\s+/g, ' ').slice(0, 1500) || '';
+    const doi = excerpt.match(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/i)?.[0]?.replace(/[.,;]+$/, '') || null;
     const paper = {
       id, title, abstract: excerpt, authors, published: file.lastModified ? new Date(file.lastModified).toISOString() : new Date().toISOString(),
-      venue: '本地 PDF', venueName: '本地 PDF', source: '本地导入', kind: 'local', area: 'ai', link: '', citationCount: 0, qualityScore: 0
+      venue: '本地 PDF', venueName: '本地 PDF', source: '本地导入', kind: 'local', area: 'ai', link: doi ? `https://doi.org/${doi}` : '', doi, citationCount: 0, qualityScore: 0
     };
     const record = ensureRecord(paper);
     record.savedAt = new Date().toISOString();
@@ -614,19 +783,22 @@ async function importStandalonePdf(file) {
 }
 async function openPdfReader(paperId) {
   try {
-    const stored = await getStoredPdf(paperId);
+    const stored = storedPdfDefaults(await getStoredPdf(paperId));
     if (!stored?.blob) throw new Error('本地 PDF 文件不存在，可能已被浏览器清理');
     if (state.pdfLoadingTask) await state.pdfLoadingTask.destroy().catch(() => {});
     const pdfjs = await loadPdfModule();
     state.pdfLoadingTask = pdfjs.getDocument(pdfDocumentOptions(new Uint8Array(await stored.blob.arrayBuffer())));
+    configurePdfPassword(state.pdfLoadingTask);
     state.pdfDocument = await state.pdfLoadingTask.promise;
     state.pdfRecord = stored; state.pdfPaperId = paperId;
     state.pdfPage = Math.max(1, Math.min(stored.pageCount, Number(getRecord(paperId)?.pdfAttachment?.lastPage || 1)));
-    state.pdfScale = Number(el('pdf-zoom').value || 1.15);
+    state.pdfScale = Number(el('pdf-zoom').value || 1.4);
+    state.pdfAnnotationHistory = []; state.pdfAnnotationMode = null; state.pdfSelection = null;
     el('pdf-title').textContent = getPaper(paperId)?.title || stored.fileName;
-    el('pdf-meta').textContent = `${stored.fileName} · ${(stored.size / 1024 / 1024).toFixed(1)} MB · 本机存储`;
+    el('pdf-meta').textContent = `${stored.fileName} · ${(stored.size / 1024 / 1024).toFixed(1)} MB · 本机存储 · ${stored.annotations.length} 条标注`;
     el('pdf-search-input').value = ''; el('pdf-search-results').classList.add('hidden'); el('pdf-search-results').innerHTML = '';
     el('pdf-modal').classList.add('open');
+    updatePdfAnnotationMode();
     await renderPdfPage();
   } catch (error) { toast(error.message || '无法打开 PDF'); }
 }
@@ -643,20 +815,295 @@ async function renderPdfPage() {
   canvas.style.width = `${Math.floor(viewport.width)}px`; canvas.style.height = `${Math.floor(viewport.height)}px`;
   state.pdfRenderTask = page.render({ canvasContext: context, viewport, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null });
   await state.pdfRenderTask.promise;
-  state.pdfRenderTask = null; page.cleanup();
+  state.pdfRenderTask = null;
+  let textContent = null;
+  try { textContent = await page.getTextContent({ includeMarkedContent: true, disableNormalization: false }); } catch {}
+  state.pdfTextContent = textContent;
+  await renderPdfTextLayer(textContent, viewport);
+  renderPdfAnnotationLayer(viewport);
+  page.cleanup();
   const text = state.pdfRecord.pages[pageNumber - 1] || '';
-  el('pdf-page-text').textContent = text || '这一页没有可提取的文本。若它是扫描图片，请先使用本地 OCR 软件生成带文本层的 PDF。';
+  el('pdf-page-text').textContent = text || '这一页没有可提取的文本。若它是扫描图片，请点击“OCR 本页”；识别结果会保存在当前浏览器。';
   el('pdf-page-text').classList.toggle('empty', !text);
   el('pdf-page-label').textContent = `${pageNumber} / ${state.pdfDocument.numPages}`;
   el('pdf-prev').disabled = pageNumber <= 1; el('pdf-next').disabled = pageNumber >= state.pdfDocument.numPages;
+  const extractionSource = state.pdfRecord.ocrPages?.[pageNumber] ? `OCR · ${state.pdfRecord.ocrPages[pageNumber].language || '中英'}` : text ? `PDF 文本层 · ${text.length.toLocaleString('zh-CN')} 字符` : state.pdfRecord.extractionErrors?.[pageNumber] ? `解析失败：${state.pdfRecord.extractionErrors[pageNumber]}` : '未检测到有效文本层，可使用 OCR';
+  el('pdf-extraction-report').textContent = extractionSource;
+  el('pdf-extraction-report').classList.toggle('warn', !text || Boolean(state.pdfRecord.extractionErrors?.[pageNumber]));
+  renderPdfAnnotationList();
   const attachment = getRecord(state.pdfPaperId)?.pdfAttachment;
   if (attachment) { attachment.lastPage = pageNumber; saveLibrary(); }
   setPdfProgress(100, text ? `第 ${pageNumber} 页 · 可点击或框选翻译` : `第 ${pageNumber} 页 · 未检测到文本层`);
 }
+async function renderPdfTextLayer(textContent, viewport) {
+  const layer = el('pdf-text-layer'); layer.replaceChildren();
+  layer.style.width = `${viewport.width}px`; layer.style.height = `${viewport.height}px`;
+  layer.style.setProperty('--scale-factor', state.pdfScale);
+  if (!textContent?.items?.length) return;
+  try {
+    const pdfjs = await loadPdfModule();
+    const textLayer = new pdfjs.TextLayer({ textContentSource: textContent, container: layer, viewport });
+    await textLayer.render();
+  } catch (error) {
+    console.warn('PDF text layer render failed', error);
+  }
+}
+function pdfAnnotationColor(color, alpha = 1) {
+  const hex = String(color || '#f4d35e').replace('#', '');
+  const value = hex.length === 3 ? hex.split('').map(char => char + char).join('') : hex.padEnd(6, '0').slice(0, 6);
+  const [r, g, b] = [0, 2, 4].map(index => parseInt(value.slice(index, index + 2), 16) || 0);
+  return { r: r / 255, g: g / 255, b: b / 255, css: `rgba(${r},${g},${b},${alpha})` };
+}
+function currentPdfAnnotations() { return state.pdfRecord?.annotations || []; }
+function renderPdfAnnotationLayer(viewport) {
+  const layer = el('pdf-annotation-layer'); layer.replaceChildren();
+  layer.style.width = `${viewport.width}px`; layer.style.height = `${viewport.height}px`;
+  const annotations = currentPdfAnnotations();
+  for (const annotation of annotations.filter(item => item.page === state.pdfPage)) {
+    const number = annotations.indexOf(annotation) + 1;
+    for (const rect of annotation.rects || []) {
+      const mark = document.createElement('button');
+      mark.type = 'button'; mark.className = `pdf-annotation-mark ${annotation.type}`;
+      mark.dataset.annotationId = annotation.id; mark.dataset.number = String(number);
+      mark.title = annotation.comment || annotation.text || `标注 ${number}`;
+      mark.style.left = `${rect.x * 100}%`; mark.style.top = `${rect.y * 100}%`; mark.style.width = `${rect.width * 100}%`; mark.style.height = `${rect.height * 100}%`;
+      const color = pdfAnnotationColor(annotation.color, annotation.type === 'highlight' ? .34 : .12);
+      mark.style.background = color.css; mark.style.borderColor = color.css.replace(/,[\d.]+\)$/, ',1)');
+      layer.appendChild(mark);
+    }
+  }
+}
+function annotationTypeLabel(type) { return type === 'highlight' ? '高亮' : type === 'underline' ? '下划线' : type === 'note' ? '批注' : '区域'; }
+function renderPdfAnnotationList(selectedId = null) {
+  const annotations = currentPdfAnnotations();
+  el('pdf-annotation-list').innerHTML = annotations.length ? annotations.map((item, index) => `<article class="pdf-annotation-item ${selectedId === item.id ? 'selected' : ''}" style="border-left-color:${escapeHtml(item.color)}" data-pdf-annotation-id="${escapeHtml(item.id)}"><strong>${index + 1}. 第 ${item.page} 页 · ${annotationTypeLabel(item.type)}</strong>${item.text ? `<p>${escapeHtml(item.text.slice(0, 220))}</p>` : ''}${item.comment ? `<p>批注：${escapeHtml(item.comment)}</p>` : ''}<div class="pdf-annotation-actions"><button data-pdf-annotation-action="goto">定位</button><button data-pdf-annotation-action="comment">编辑批注</button><button data-pdf-annotation-action="delete">删除</button></div></article>`).join('') : '<div class="mono">暂无 PDF 标注。选择页面文字或使用区域工具开始标注。</div>';
+}
+async function persistPdfRecord() {
+  if (!state.pdfRecord) return;
+  await putStoredPdf(state.pdfRecord);
+  const record = getRecord(state.pdfPaperId);
+  if (record) {
+    record.pdfAttachment = pdfAttachmentMeta(state.pdfRecord, record.pdfAttachment || {}); saveLibrary();
+    if (state.selectedPaperId === state.pdfPaperId) renderPdfAttachmentStatus(record);
+  }
+  el('pdf-meta').textContent = `${state.pdfRecord.fileName} · ${(state.pdfRecord.size / 1024 / 1024).toFixed(1)} MB · 本机存储 · ${currentPdfAnnotations().length} 条标注`;
+}
+function capturePdfSelection() {
+  const selection = window.getSelection(); const layer = el('pdf-text-layer'); const pageText = el('pdf-page-text');
+  if (!selection || selection.rangeCount !== 1 || selection.isCollapsed) return;
+  const range = selection.getRangeAt(0); const common = range.commonAncestorContainer.nodeType === Node.TEXT_NODE ? range.commonAncestorContainer.parentElement : range.commonAncestorContainer;
+  if (!common || (!layer.contains(common) && !pageText.contains(common))) return;
+  const bounds = layer.getBoundingClientRect();
+  const text = selection.toString().replace(/\s+/g, ' ').trim();
+  let rects = [];
+  if (layer.contains(common)) {
+    rects = [...range.getClientRects()].map(rect => ({
+      x: Math.max(0, (rect.left - bounds.left) / bounds.width),
+      y: Math.max(0, (rect.top - bounds.top) / bounds.height),
+      width: Math.min(1, rect.width / bounds.width),
+      height: Math.min(1, rect.height / bounds.height)
+    })).filter(rect => rect.width > .001 && rect.height > .001 && rect.x < 1 && rect.y < 1);
+  } else if (text && bounds.width && bounds.height) {
+    const needle = text.toLowerCase().slice(0, 24);
+    rects = [...layer.querySelectorAll('span')].filter(span => {
+      const value = span.textContent.toLowerCase(); return value.includes(needle) || text.toLowerCase().includes(value);
+    }).map(span => {
+      const rect = span.getBoundingClientRect(); return { x: (rect.left - bounds.left) / bounds.width, y: (rect.top - bounds.top) / bounds.height, width: rect.width / bounds.width, height: rect.height / bounds.height };
+    }).filter(rect => rect.width > .001 && rect.height > .001);
+  }
+  if (text) state.pdfSelection = { page: state.pdfPage, text: text.slice(0, 2000), rects };
+}
+async function addPdfSelectionAnnotation(type) {
+  const selection = state.pdfSelection;
+  if (!selection || selection.page !== state.pdfPage) return toast('请先在 PDF 页面上选择文字');
+  const comment = type === 'note' ? prompt('输入批注内容（可留空）：', '') : '';
+  if (type === 'note' && comment === null) return;
+  const annotation = {
+    id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`, type, page: state.pdfPage,
+    rects: selection.rects, text: selection.text, comment: comment?.trim() || '', color: el('pdf-annotation-color').value,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
+  };
+  state.pdfRecord.annotations.push(annotation); state.pdfAnnotationHistory.push(annotation.id);
+  state.pdfSelection = null; window.getSelection()?.removeAllRanges();
+  await persistPdfRecord(); renderPdfAnnotationLayerForCurrentPage(); renderPdfAnnotationList(annotation.id); toast(`${annotationTypeLabel(type)}已保存`);
+}
+function renderPdfAnnotationLayerForCurrentPage() {
+  const canvas = el('pdf-canvas');
+  renderPdfAnnotationLayer({ width: parseFloat(canvas.style.width) || canvas.width, height: parseFloat(canvas.style.height) || canvas.height });
+}
+function updatePdfAnnotationMode() {
+  document.querySelectorAll('[data-pdf-draw-mode]').forEach(button => button.classList.toggle('active', button.dataset.pdfDrawMode === state.pdfAnnotationMode));
+  el('pdf-annotation-layer').classList.toggle('drawing', Boolean(state.pdfAnnotationMode));
+}
+async function addPdfAreaAnnotation(type, rect) {
+  const comment = type === 'note' ? prompt('输入区域批注：', '') : '';
+  if (type === 'note' && comment === null) return;
+  const annotation = { id: crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}`, type, page: state.pdfPage, rects: [rect], text: '', comment: comment?.trim() || '', color: el('pdf-annotation-color').value, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  state.pdfRecord.annotations.push(annotation); state.pdfAnnotationHistory.push(annotation.id);
+  await persistPdfRecord(); renderPdfAnnotationLayerForCurrentPage(); renderPdfAnnotationList(annotation.id);
+}
+async function undoPdfAnnotation() {
+  const id = state.pdfAnnotationHistory.pop() || currentPdfAnnotations().at(-1)?.id;
+  if (!id) return toast('没有可撤销的标注');
+  state.pdfRecord.annotations = currentPdfAnnotations().filter(item => item.id !== id);
+  await persistPdfRecord(); renderPdfAnnotationLayerForCurrentPage(); renderPdfAnnotationList(); toast('已撤销上一条标注');
+}
+async function reparsePdfText() {
+  if (!state.pdfDocument || !state.pdfRecord) return;
+  const button = el('pdf-reparse'); button.disabled = true; const errors = {};
+  try {
+    for (let pageNumber = 1; pageNumber <= state.pdfDocument.numPages; pageNumber += 1) {
+      setPdfProgress(pageNumber / state.pdfDocument.numPages * 100, `重新解析 ${pageNumber}/${state.pdfDocument.numPages}`);
+      const page = await state.pdfDocument.getPage(pageNumber);
+      try {
+        const text = (await extractPdfPageText(page)).text;
+        if (text) { state.pdfRecord.pages[pageNumber - 1] = text; delete state.pdfRecord.ocrPages[pageNumber]; }
+      } catch (error) { errors[pageNumber] = error.message || '文本层解析失败'; }
+      finally { page.cleanup(); }
+    }
+    state.pdfRecord.extractionErrors = errors; await persistPdfRecord(); await renderPdfPage();
+    toast(`重新解析完成：${state.pdfRecord.pages.filter(Boolean).length}/${state.pdfRecord.pageCount} 页有文本`);
+  } finally { button.disabled = false; }
+}
+async function getOcrWorker() {
+  if (state.ocrWorker) return state.ocrWorker;
+  const module = await loadTesseractModule(); const createWorker = module.createWorker || module.default?.createWorker;
+  if (typeof createWorker !== 'function') throw new Error('OCR 模块加载失败');
+  state.ocrWorker = await createWorker(['eng', 'chi_sim'], 1, {
+    workerPath: new URL(`./vendor/tesseract/worker.min.js?v=${APP_VERSION}`, location.href).href,
+    corePath: new URL('./vendor/tesseract-core/', location.href).href.replace(/\/$/, ''),
+    langPath: 'https://tessdata.projectnaptha.com/4.0.0',
+    logger: message => {
+      if (message.status === 'recognizing text') setPdfProgress(message.progress * 100, `OCR 识别 ${Math.round(message.progress * 100)}%`);
+      else if (message.status) setPdfProgress(5, `OCR：${message.status}`);
+    }
+  });
+  return state.ocrWorker;
+}
+async function ocrPdfPage(pageNumber, rerender = true) {
+  if (!state.pdfDocument || !state.pdfRecord) return false;
+  const page = await state.pdfDocument.getPage(pageNumber);
+  const base = page.getViewport({ scale: 1 }); const scale = Math.min(2.6, 3000 / Math.max(base.width, base.height));
+  const viewport = page.getViewport({ scale: Math.max(1.8, scale) });
+  const canvas = document.createElement('canvas'); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
+  const renderTask = page.render({ canvasContext: canvas.getContext('2d', { alpha: false }), viewport });
+  await renderTask.promise; page.cleanup();
+  const worker = await getOcrWorker(); const result = await worker.recognize(canvas);
+  const text = String(result.data?.text || '').normalize('NFC').replace(/\n{3,}/g, '\n\n').trim();
+  if (!usefulPdfText(text)) throw new Error('OCR 未识别到有效文字，请检查页面清晰度或语言');
+  state.pdfRecord.pages[pageNumber - 1] = text;
+  state.pdfRecord.ocrPages[pageNumber] = { language: 'eng+chi_sim', confidence: Number(result.data?.confidence || 0), updatedAt: new Date().toISOString() };
+  delete state.pdfRecord.extractionErrors[pageNumber];
+  await persistPdfRecord(); if (rerender && state.pdfPage === pageNumber) await renderPdfPage();
+  return true;
+}
+async function ocrCurrentPdfPage() {
+  const button = el('pdf-ocr-page'); button.disabled = true;
+  try { await ocrPdfPage(state.pdfPage); toast(`第 ${state.pdfPage} 页 OCR 完成`); }
+  catch (error) { toast(`OCR 失败：${error.message}`); }
+  finally { button.disabled = false; setPdfProgress(100, 'OCR 任务结束'); }
+}
+async function ocrMissingPdfPages() {
+  const missing = state.pdfRecord.pages.map((text, index) => text ? null : index + 1).filter(Boolean);
+  if (!missing.length) return toast('所有页面已有可检索文本');
+  if (missing.length > 20 && !confirm(`共有 ${missing.length} 个无文本页。浏览器 OCR 耗时较长，本次先处理前 20 页，是否继续？`)) return;
+  const targets = missing.slice(0, 20); const button = el('pdf-ocr-missing'); button.disabled = true; let success = 0;
+  try {
+    for (let index = 0; index < targets.length; index += 1) {
+      setPdfProgress(index / targets.length * 100, `OCR 第 ${targets[index]} 页 · ${index + 1}/${targets.length}`);
+      try { if (await ocrPdfPage(targets[index], false)) success += 1; } catch {}
+    }
+    await renderPdfPage(); toast(`OCR 完成：${success}/${targets.length} 页`);
+  } finally { button.disabled = false; setPdfProgress(100, 'OCR 任务结束'); }
+}
+function downloadBlob(name, blob) {
+  const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1500);
+}
+function safePdfFileStem(name) { return String(name || 'paper').replace(/\.pdf$/i, '').replace(/[\\/:*?"<>|]+/g, '-').slice(0, 100); }
+function wrapCanvasText(context, text, maxWidth) {
+  const chars = [...String(text || '')]; const lines = []; let line = '';
+  for (const char of chars) {
+    if (char === '\n') { lines.push(line); line = ''; continue; }
+    if (context.measureText(line + char).width > maxWidth && line) { lines.push(line); line = char; } else line += char;
+  }
+  if (line) lines.push(line); return lines;
+}
+async function annotationSummaryPngs(annotations) {
+  const groups = []; for (let index = 0; index < annotations.length; index += 8) groups.push(annotations.slice(index, index + 8));
+  const blobs = [];
+  for (let groupIndex = 0; groupIndex < groups.length; groupIndex += 1) {
+    const canvas = document.createElement('canvas'); canvas.width = 1240; canvas.height = 1754; const context = canvas.getContext('2d');
+    context.fillStyle = '#ffffff'; context.fillRect(0, 0, canvas.width, canvas.height); context.fillStyle = '#163e2e'; context.font = 'bold 38px "Microsoft YaHei",sans-serif'; context.fillText('PaperScope PDF 标注摘要', 80, 85);
+    context.fillStyle = '#5f6f66'; context.font = '22px "Microsoft YaHei",sans-serif'; context.fillText(`${getPaper(state.pdfPaperId)?.title || state.pdfRecord.fileName} · 第 ${groupIndex + 1}/${groups.length} 页`, 80, 125);
+    let y = 180;
+    for (const annotation of groups[groupIndex]) {
+      const number = annotations.indexOf(annotation) + 1; const color = pdfAnnotationColor(annotation.color);
+      context.fillStyle = `rgb(${Math.round(color.r * 255)},${Math.round(color.g * 255)},${Math.round(color.b * 255)})`; context.fillRect(80, y - 22, 14, 32);
+      context.fillStyle = '#18231e'; context.font = 'bold 25px "Microsoft YaHei",sans-serif'; context.fillText(`${number}. 第 ${annotation.page} 页 · ${annotationTypeLabel(annotation.type)}`, 112, y);
+      y += 38; context.font = '21px "Microsoft YaHei",sans-serif'; context.fillStyle = '#33443b';
+      for (const line of wrapCanvasText(context, annotation.text || '区域标注', 1030).slice(0, 4)) { context.fillText(line, 112, y); y += 29; }
+      if (annotation.comment) { context.fillStyle = '#0b6b4b'; for (const line of wrapCanvasText(context, `批注：${annotation.comment}`, 1030).slice(0, 4)) { context.fillText(line, 112, y); y += 29; } }
+      y += 32; context.strokeStyle = '#dce5df'; context.beginPath(); context.moveTo(80, y); context.lineTo(1160, y); context.stroke(); y += 28;
+    }
+    blobs.push(await new Promise(resolve => canvas.toBlob(resolve, 'image/png')));
+  }
+  return blobs;
+}
+async function exportAnnotatedPdf() {
+  const annotations = currentPdfAnnotations(); if (!annotations.length) return toast('还没有 PDF 标注');
+  const button = el('pdf-export-annotated'); button.disabled = true; button.textContent = '正在生成…';
+  try {
+    const { PDFDocument, StandardFonts, rgb } = await loadPdfLibModule();
+    const source = new Uint8Array(await state.pdfRecord.blob.arrayBuffer());
+    const pdf = await PDFDocument.load(source, { ignoreEncryption: true, updateMetadata: false });
+    const pages = pdf.getPages(); const font = await pdf.embedFont(StandardFonts.Helvetica); let marker = 0; let rotatedSkipped = 0;
+    for (const annotation of annotations) {
+      const page = pages[annotation.page - 1]; if (!page) continue; marker += 1;
+      if ((page.getRotation()?.angle || 0) % 360 !== 0) { rotatedSkipped += 1; continue; }
+      const { width, height } = page.getSize(); const color = pdfAnnotationColor(annotation.color);
+      for (const rect of annotation.rects || []) {
+        const x = rect.x * width; const y = height - (rect.y + rect.height) * height; const w = rect.width * width; const h = rect.height * height;
+        if (annotation.type === 'highlight') page.drawRectangle({ x, y, width: w, height: h, color: rgb(color.r, color.g, color.b), opacity: .32 });
+        else if (annotation.type === 'underline') page.drawRectangle({ x, y, width: w, height: Math.max(1.5, h * .08), color: rgb(color.r, color.g, color.b), opacity: .95 });
+        else {
+          page.drawRectangle({ x, y, width: w, height: h, borderColor: rgb(color.r, color.g, color.b), borderWidth: 1.7, borderOpacity: .95 });
+          if (annotation.type === 'note') {
+            page.drawCircle({ x: Math.min(width - 8, x + w), y: Math.min(height - 8, y + h), size: 8, color: rgb(.05, .38, .27) });
+            page.drawText(String(marker), { x: Math.min(width - 11, x + w - 3.5), y: Math.min(height - 11, y + h - 3.5), size: 7, font, color: rgb(1, 1, 1) });
+          }
+        }
+      }
+    }
+    for (const blob of await annotationSummaryPngs(annotations)) {
+      const image = await pdf.embedPng(await blob.arrayBuffer()); const page = pdf.addPage([595.28, 841.89]);
+      page.drawImage(image, { x: 0, y: 0, width: 595.28, height: 841.89 });
+    }
+    pdf.setModificationDate(new Date()); pdf.setProducer('PaperScope PDF annotation export');
+    const bytes = await pdf.save({ useObjectStreams: false });
+    downloadBlob(`${safePdfFileStem(state.pdfRecord.fileName)}-annotated.pdf`, new Blob([bytes], { type: 'application/pdf' }));
+    toast(`带标注 PDF 已导出${rotatedSkipped ? `；${rotatedSkipped} 条旋转页标注仅写入摘要` : ''}`);
+  } catch (error) { toast(`导出失败：${error.message}`); }
+  finally { button.disabled = false; button.textContent = '导出带标注 PDF'; }
+}
+function exportPdfAnnotations() {
+  if (!state.pdfRecord) return;
+  const payload = { schema: 'paperscope-pdf-annotations-v1', paperId: state.pdfPaperId, fileName: state.pdfRecord.fileName, pageCount: state.pdfRecord.pageCount, exportedAt: new Date().toISOString(), annotations: currentPdfAnnotations() };
+  downloadText(`${safePdfFileStem(state.pdfRecord.fileName)}-annotations.json`, JSON.stringify(payload, null, 2), 'application/json');
+}
+async function importPdfAnnotationsFile(file) {
+  try {
+    const payload = JSON.parse(await file.text());
+    if (payload.schema !== 'paperscope-pdf-annotations-v1' || !Array.isArray(payload.annotations)) throw new Error('不是有效的 PaperScope PDF 标注文件');
+    if (Number(payload.pageCount) !== Number(state.pdfRecord.pageCount) && !confirm('标注文件页数与当前 PDF 不一致，仍要导入吗？')) return;
+    const existing = new Set(currentPdfAnnotations().map(item => item.id));
+    state.pdfRecord.annotations.push(...payload.annotations.filter(item => item?.id && item?.page && Array.isArray(item.rects) && !existing.has(item.id)));
+    await persistPdfRecord(); renderPdfAnnotationLayerForCurrentPage(); renderPdfAnnotationList(); toast('PDF 标注已导入');
+  } catch (error) { toast(error.message || '标注导入失败'); }
+}
 function closePdfReader() {
   state.pdfRenderTask?.cancel(); state.pdfRenderTask = null;
   state.pdfLoadingTask?.destroy().catch(() => {});
-  state.pdfLoadingTask = null; state.pdfDocument = null; state.pdfRecord = null; state.pdfPaperId = null;
+  state.pdfLoadingTask = null; state.pdfDocument = null; state.pdfRecord = null; state.pdfPaperId = null; state.pdfTextContent = null; state.pdfSelection = null; state.pdfAnnotationMode = null;
 }
 function searchPdfText() {
   const query = el('pdf-search-input').value.trim().toLowerCase();
@@ -1576,9 +2023,15 @@ el('library-select-all').addEventListener('change', event => { document.querySel
 el('batch-read').addEventListener('click', () => { for (const id of state.batch) { const record = ensureRecord(getPaper(id)); record.readAt ||= new Date().toISOString(); record.progress = 100; } saveLibrary(); renderRoute(); toast('已批量标记为已读'); });
 el('batch-queue').addEventListener('click', () => { for (const id of state.batch) ensureRecord(getPaper(id)).queueAt ||= new Date().toISOString(); saveLibrary(); renderRoute(); toast('已加入阅读队列'); });
 el('batch-citations').addEventListener('click', () => { if (!state.batch.size) return toast('请先选择论文'); downloadText('paperscope-citations.bib', [...state.batch].map(id => bibtexFor(getPaper(id))).join('\n\n')); });
+el('merge-duplicates').addEventListener('click', mergeSelectedDuplicates);
 el('check-publications').addEventListener('click', async () => { const ids = state.batch.size ? [...state.batch] : Object.entries(library.records).filter(([, record]) => record.savedAt).map(([id]) => id).slice(0, 30); if (!ids.length) return toast('请先收藏或选择论文'); const button = el('check-publications'); button.disabled = true; for (let index = 0; index < ids.length; index += 1) { button.textContent = `${index + 1}/${ids.length}`; await checkPublication(ids[index], true); if (index < ids.length - 1) await new Promise(resolve => setTimeout(resolve, 280)); } button.disabled = false; button.textContent = '检查中刊状态'; renderRoute(); toast('发表状态检查完成'); });
 el('collection-filter').addEventListener('change', event => { const route = parseRoute(); navigate('library/collections', { ...route.query, collection: event.target.value, page: 1 }); });
-el('create-collection').addEventListener('click', () => { const name = el('new-collection-name').value.trim(); if (!name) return toast('请输入专题名称'); const id = `${slug(name)}-${Date.now().toString(36)}`; library.collections[id] = { name, createdAt: new Date().toISOString() }; saveLibrary(); el('new-collection-name').value = ''; renderRoute(); toast('专题已创建'); });
+el('create-collection').addEventListener('click', () => { const name = el('new-collection-name').value.trim(); if (!name) return toast('请输入专题名称'); const id = `${slug(name)}-${Date.now().toString(36)}`; library.collections[id] = { name, parentId: el('collection-parent').value || null, createdAt: new Date().toISOString() }; saveLibrary(); el('new-collection-name').value = ''; renderRoute(); toast('专题已创建'); });
+el('rename-collection').addEventListener('click', () => { const id = el('collection-filter').value; if (!library.collections[id]) return toast('请先选择一个专题'); const name = prompt('新的专题名称：', library.collections[id].name); if (!name?.trim()) return; library.collections[id].name = name.trim(); saveLibrary(); renderRoute(); toast('专题已重命名'); });
+el('delete-collection').addEventListener('click', () => { const id = el('collection-filter').value; if (!library.collections[id]) return toast('请先选择一个专题'); if (!confirm(`删除专题“${library.collections[id].name}”？论文不会被删除。`)) return; for (const record of Object.values(library.records)) record.collections = (record.collections || []).filter(value => value !== id); for (const collection of Object.values(library.collections)) if (collection.parentId === id) collection.parentId = null; delete library.collections[id]; saveLibrary(); navigate('library/collections'); toast('专题已删除'); });
+el('smart-filter').addEventListener('change', event => navigate('library/smart', { smart: event.target.value, page: 1 }));
+el('library-pdf-search-button').addEventListener('click', searchLocalPdfLibrary);
+el('library-pdf-search').addEventListener('keydown', event => { if (event.key === 'Enter') searchLocalPdfLibrary(); });
 el('export-vocabulary').addEventListener('click', exportVocabulary); el('export-library').addEventListener('click', exportLibrary); el('import-library').addEventListener('click', () => el('import-file').click()); el('import-file').addEventListener('change', event => { const [file] = event.target.files; if (file) importLibraryFile(file); event.target.value = ''; });
 el('import-local-pdf').addEventListener('click', () => el('local-pdf-file').click());
 el('local-pdf-file').addEventListener('change', async event => { const [file] = event.target.files; if (file) await importStandalonePdf(file); event.target.value = ''; });
@@ -1590,6 +2043,7 @@ el('venue-list').addEventListener('click', event => { const row = event.target.c
 el('drawer-close').addEventListener('click', () => closeDrawer()); el('drawer-overlay').addEventListener('click', () => closeDrawer()); el('detail-save').addEventListener('click', () => toggleRecordField(state.selectedPaperId, 'saved')); el('detail-queue').addEventListener('click', () => toggleRecordField(state.selectedPaperId, 'queue')); el('detail-read').addEventListener('click', () => toggleRecordField(state.selectedPaperId, 'read')); el('detail-compare').addEventListener('click', () => toggleCompare(state.selectedPaperId));
 el('detail-publication').addEventListener('click', async () => { el('detail-publication').disabled = true; el('detail-publication-status').textContent = '查询 Crossref…'; await checkPublication(state.selectedPaperId); el('detail-publication').disabled = false; });
 el('copy-bibtex').addEventListener('click', () => copyText(bibtexFor(getPaper(state.selectedPaperId)), 'BibTeX 已复制')); el('copy-markdown').addEventListener('click', () => copyText(markdownFor(getPaper(state.selectedPaperId)), 'Markdown 引用已复制'));
+el('detail-edit-metadata').addEventListener('click', openMetadataEditor); el('save-metadata').addEventListener('click', saveMetadataEditor);
 el('detail-bilingual').addEventListener('click', translatePaperAbstract);
 el('detail-pdf-import').addEventListener('click', () => el('detail-pdf-file').click());
 el('detail-pdf-file').addEventListener('change', async event => { const [file] = event.target.files; if (file) await attachPdfToPaper(file, state.selectedPaperId); event.target.value = ''; });
@@ -1604,6 +2058,49 @@ el('pdf-search-button').addEventListener('click', searchPdfText);
 el('pdf-search-input').addEventListener('keydown', event => { if (event.key === 'Enter') searchPdfText(); });
 el('pdf-search-results').addEventListener('click', async event => { const button = event.target.closest('[data-pdf-page]'); if (!button) return; state.pdfPage = Number(button.dataset.pdfPage); await renderPdfPage(); });
 el('pdf-copy-page').addEventListener('click', () => copyText(state.pdfRecord?.pages?.[state.pdfPage - 1] || '', '本页文本已复制'));
+el('pdf-reparse').addEventListener('click', reparsePdfText);
+el('pdf-ocr-page').addEventListener('click', ocrCurrentPdfPage);
+el('pdf-ocr-missing').addEventListener('click', ocrMissingPdfPages);
+el('pdf-highlight-selection').addEventListener('click', () => addPdfSelectionAnnotation('highlight'));
+el('pdf-underline-selection').addEventListener('click', () => addPdfSelectionAnnotation('underline'));
+el('pdf-note-selection').addEventListener('click', () => addPdfSelectionAnnotation('note'));
+el('pdf-undo-annotation').addEventListener('click', undoPdfAnnotation);
+el('pdf-export-annotated').addEventListener('click', exportAnnotatedPdf);
+el('pdf-export-annotations').addEventListener('click', exportPdfAnnotations);
+el('pdf-import-annotations').addEventListener('click', () => el('pdf-annotations-file').click());
+el('pdf-annotations-file').addEventListener('change', async event => { const [file] = event.target.files; if (file) await importPdfAnnotationsFile(file); event.target.value = ''; });
+el('pdf-text-layer').addEventListener('mouseup', () => setTimeout(capturePdfSelection));
+el('pdf-page-text').addEventListener('mouseup', () => setTimeout(capturePdfSelection));
+document.querySelectorAll('[data-pdf-draw-mode]').forEach(button => button.addEventListener('click', () => { state.pdfAnnotationMode = state.pdfAnnotationMode === button.dataset.pdfDrawMode ? null : button.dataset.pdfDrawMode; updatePdfAnnotationMode(); }));
+el('pdf-annotation-layer').addEventListener('pointerdown', event => {
+  const mark = event.target.closest('[data-annotation-id]');
+  if (mark) { renderPdfAnnotationList(mark.dataset.annotationId); return; }
+  if (!state.pdfAnnotationMode) return;
+  const layer = el('pdf-annotation-layer'); const bounds = layer.getBoundingClientRect();
+  const x = Math.max(0, Math.min(bounds.width, event.clientX - bounds.left)); const y = Math.max(0, Math.min(bounds.height, event.clientY - bounds.top));
+  const draft = document.createElement('div'); draft.className = 'pdf-annotation-draft'; draft.style.left = `${x}px`; draft.style.top = `${y}px`; layer.appendChild(draft);
+  state.pdfAnnotationDraft = { pointerId: event.pointerId, x, y, bounds, draft, mode: state.pdfAnnotationMode }; layer.setPointerCapture(event.pointerId);
+});
+el('pdf-annotation-layer').addEventListener('pointermove', event => {
+  const value = state.pdfAnnotationDraft; if (!value || value.pointerId !== event.pointerId) return;
+  const x = Math.max(0, Math.min(value.bounds.width, event.clientX - value.bounds.left)); const y = Math.max(0, Math.min(value.bounds.height, event.clientY - value.bounds.top));
+  value.draft.style.left = `${Math.min(value.x, x)}px`; value.draft.style.top = `${Math.min(value.y, y)}px`; value.draft.style.width = `${Math.abs(x - value.x)}px`; value.draft.style.height = `${Math.abs(y - value.y)}px`;
+});
+el('pdf-annotation-layer').addEventListener('pointerup', async event => {
+  const value = state.pdfAnnotationDraft; if (!value || value.pointerId !== event.pointerId) return; state.pdfAnnotationDraft = null;
+  const x = Math.max(0, Math.min(value.bounds.width, event.clientX - value.bounds.left)); const y = Math.max(0, Math.min(value.bounds.height, event.clientY - value.bounds.top));
+  value.draft.remove(); const width = Math.abs(x - value.x); const height = Math.abs(y - value.y);
+  if (width < 8 || height < 8) return toast('请拖出一个更大的标注区域');
+  await addPdfAreaAnnotation(value.mode, { x: Math.min(value.x, x) / value.bounds.width, y: Math.min(value.y, y) / value.bounds.height, width: width / value.bounds.width, height: height / value.bounds.height });
+});
+el('pdf-annotation-list').addEventListener('click', async event => {
+  const item = event.target.closest('[data-pdf-annotation-id]'); if (!item) return; const id = item.dataset.pdfAnnotationId;
+  const annotation = currentPdfAnnotations().find(value => value.id === id); const action = event.target.closest('[data-pdf-annotation-action]')?.dataset.pdfAnnotationAction;
+  if (!annotation) return;
+  if (action === 'goto') { state.pdfPage = annotation.page; await renderPdfPage(); renderPdfAnnotationList(id); }
+  else if (action === 'comment') { const comment = prompt('编辑批注：', annotation.comment || ''); if (comment !== null) { annotation.comment = comment.trim(); annotation.updatedAt = new Date().toISOString(); await persistPdfRecord(); renderPdfAnnotationList(id); } }
+  else if (action === 'delete' && confirm('删除这条 PDF 标注？')) { state.pdfRecord.annotations = currentPdfAnnotations().filter(value => value.id !== id); await persistPdfRecord(); renderPdfAnnotationLayerForCurrentPage(); renderPdfAnnotationList(); }
+});
 el('save-note').addEventListener('click', () => { const record = ensureRecord(getPaper(state.selectedPaperId)); record.note = el('paper-note').value.trim(); record.tags = [...new Set(el('paper-tags').value.split(/[,，]/).map(value => value.trim()).filter(Boolean))].slice(0, 12); record.progress = Number(el('reading-progress').value); if (record.progress === 100) record.readAt ||= new Date().toISOString(); saveLibrary(); toast('阅读记录已保存'); });
 el('add-to-collection').addEventListener('click', () => { const collectionId = el('paper-collection').value; if (!collectionId) return toast('请先选择专题'); const record = ensureRecord(getPaper(state.selectedPaperId)); if (!record.collections.includes(collectionId)) record.collections.push(collectionId); saveLibrary(); toast('已加入专题收藏'); });
 el('add-highlight').addEventListener('click', () => { const selection = window.getSelection(); const text = selection?.toString().replace(/\s+/g, ' ').trim(); const anchor = selection?.anchorNode; if (!text || text.length < 3) return toast('请先选中摘要文字'); if (text.length > 500) return toast('单条标注最多 500 字符'); if (!anchor || !el('detail-abstract').contains(anchor.nodeType === Node.TEXT_NODE ? anchor.parentNode : anchor)) return toast('只能标注摘要文字'); const record = ensureRecord(getPaper(state.selectedPaperId)); if (record.highlights.some(item => item.text === text)) return toast('这段文字已经标注'); record.highlights.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), text, color: el('highlight-color').value, createdAt: new Date().toISOString() }); saveLibrary(); selection.removeAllRanges(); renderHighlights(); toast('标注已保存'); });

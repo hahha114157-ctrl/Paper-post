@@ -1,5 +1,5 @@
-const VERSION = '6.1.0';
-const CACHE = `paperscope-pages-v11-${VERSION}`;
+const VERSION = '6.2.0';
+const CACHE = `paperscope-pages-v12-${VERSION}`;
 const SHELL = [
   './',
   `./app.js?v=${VERSION}`,
@@ -7,6 +7,9 @@ const SHELL = [
   './icon.svg',
   `./vendor/pdfjs/pdf.mjs?v=${VERSION}`,
   `./vendor/pdfjs/pdf.worker.mjs?v=${VERSION}`,
+  `./vendor/pdf-lib/pdf-lib.mjs?v=${VERSION}`,
+  `./vendor/tesseract/tesseract.mjs?v=${VERSION}`,
+  `./vendor/tesseract/worker.min.js?v=${VERSION}`,
   `./data/dictionary/manifest.json?v=${VERSION}`,
   `./data/dictionary/domain.json?v=${VERSION}`
 ];
