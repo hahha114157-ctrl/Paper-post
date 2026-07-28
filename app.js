@@ -1,4 +1,4 @@
-const APP_VERSION = '6.3.4';
+const APP_VERSION = '6.3.5';
 const STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
 const LEGACY_SAVED_KEY = 'paperscope-saved';
@@ -12,9 +12,11 @@ const TRANSLATION_HISTORY_KEY = 'paperscope-translation-history-v1';
 const PDF_DB_NAME = 'paperscope-pdf-library-v1';
 const PDF_STORE_NAME = 'pdfs';
 const PDF_VIEW_MODE_KEY = 'paperscope-pdf-view-mode-v1';
+const PDF_INSPECTOR_OPEN_KEY = 'paperscope-pdf-inspector-open-v1';
+const PDF_INSPECTOR_TAB_KEY = 'paperscope-pdf-inspector-tab-v1';
 const TRANSLATION_DEFAULTS = {
   enabled: true, wordClick: true, selection: true, cache: true, mode: 'auto',
-  positionMode: 'follow', position: null, onlineEndpoint: ''
+  wordClickMode: 'ctrl', positionMode: 'follow', position: null, onlineEndpoint: ''
 };
 const el = id => document.getElementById(id);
 
@@ -55,6 +57,9 @@ const state = {
   pdfLoadingTask: null, pdfDocument: null, pdfRecord: null, pdfPaperId: null, pdfPage: 1, pdfScale: 1.4, pdfRenderTask: null,
   pdfTextContent: null, pdfSelection: null, pdfAnnotationMode: null, pdfAnnotationDraft: null, pdfTextSelectionDraft: null, pdfBrowseSelection: null, pdfSuppressWordClick: false, pdfAnnotationHistory: [], libraryPdfMatches: null,
   pdfViewMode: localStorage.getItem(PDF_VIEW_MODE_KEY) === 'paged' ? 'paged' : 'continuous',
+  pdfInspectorOpen: localStorage.getItem(PDF_INSPECTOR_OPEN_KEY) === 'open',
+  pdfInspectorTab: localStorage.getItem(PDF_INSPECTOR_TAB_KEY) === 'text' ? 'text' : 'annotations',
+  pdfColumnTemplate: null,
   pdfContinuousObserver: null, pdfPageObserver: null, pdfContinuousTasks: new Map(), pdfPageVisibility: new Map(),
   lineageRequestId: 0,
   serviceWorkerRegistration: null, updateReloading: false
@@ -796,6 +801,7 @@ async function openPdfReader(paperId) {
     state.pdfRecord = stored; state.pdfPaperId = paperId;
     state.pdfPage = Math.max(1, Math.min(stored.pageCount, Number(getRecord(paperId)?.pdfAttachment?.lastPage || 1)));
     state.pdfScale = Number(el('pdf-zoom').value || 1.4);
+    state.pdfColumnTemplate = null;
     clearPdfBrowseSelection();
     state.pdfAnnotationHistory = []; state.pdfAnnotationMode = null; state.pdfSelection = null;
     state.pdfViewMode = localStorage.getItem(PDF_VIEW_MODE_KEY) === 'paged' ? 'paged' : 'continuous';
@@ -804,6 +810,7 @@ async function openPdfReader(paperId) {
     el('pdf-meta').textContent = `${stored.fileName} · ${(stored.size / 1024 / 1024).toFixed(1)} MB · 本机存储 · ${stored.annotations.length} 条标注`;
     el('pdf-search-input').value = ''; el('pdf-search-results').classList.add('hidden'); el('pdf-search-results').innerHTML = '';
     el('pdf-modal').classList.add('open');
+    applyPdfInspectorState();
     updatePdfAnnotationMode();
     await renderPdfPage();
   } catch (error) { toast(error.message || '无法打开 PDF'); }
@@ -841,6 +848,7 @@ function updatePdfCurrentPage(pageNumber, { save = true } = {}) {
   el('pdf-page-text').textContent = text || '这一页没有可提取的文本。若它是扫描图片，请点击“OCR 本页”；识别结果会保存在当前浏览器。';
   el('pdf-page-text').classList.toggle('empty', !text);
   el('pdf-page-label').textContent = `${state.pdfPage} / ${state.pdfDocument.numPages}`;
+  el('pdf-pane-page').textContent = String(state.pdfPage);
   el('pdf-prev').disabled = state.pdfPage <= 1; el('pdf-next').disabled = state.pdfPage >= state.pdfDocument.numPages;
   const extractionSource = state.pdfRecord.ocrPages?.[state.pdfPage] ? `OCR · ${state.pdfRecord.ocrPages[state.pdfPage].language || '中英'}` : text ? `PDF 文本层 · ${text.length.toLocaleString('zh-CN')} 字符` : state.pdfRecord.extractionErrors?.[state.pdfPage] ? `解析失败：${state.pdfRecord.extractionErrors[state.pdfPage]}` : '未检测到有效文本层，可使用 OCR';
   el('pdf-extraction-report').textContent = extractionSource;
@@ -998,8 +1006,29 @@ function renderPdfAnnotationLayer(viewport, pageNumber = state.pdfPage, layer = 
   layer.classList.toggle('drawing', ['area', 'area-note'].includes(state.pdfAnnotationMode));
 }
 function annotationTypeLabel(type) { return type === 'highlight' ? '高亮' : type === 'underline' ? '下划线' : type === 'note' ? '批注' : '区域'; }
+function applyPdfInspectorState() {
+  const pane = el('pdf-text-pane'); const reader = el('pdf-reader'); const toggle = el('pdf-inspector-toggle');
+  if (!pane || !reader || !toggle) return;
+  pane.classList.toggle('hidden', !state.pdfInspectorOpen);
+  reader.classList.toggle('inspector-hidden', !state.pdfInspectorOpen);
+  toggle.setAttribute('aria-expanded', String(state.pdfInspectorOpen));
+  document.querySelectorAll('[data-pdf-pane-tab]').forEach(button => {
+    const active = button.dataset.pdfPaneTab === state.pdfInspectorTab;
+    button.classList.toggle('active', active); button.setAttribute('aria-selected', String(active));
+  });
+  el('pdf-pane-annotations').classList.toggle('hidden', state.pdfInspectorTab !== 'annotations');
+  el('pdf-pane-text').classList.toggle('hidden', state.pdfInspectorTab !== 'text');
+}
+function setPdfInspector(open, tab = state.pdfInspectorTab) {
+  state.pdfInspectorOpen = Boolean(open);
+  state.pdfInspectorTab = tab === 'text' ? 'text' : 'annotations';
+  localStorage.setItem(PDF_INSPECTOR_OPEN_KEY, state.pdfInspectorOpen ? 'open' : 'closed');
+  localStorage.setItem(PDF_INSPECTOR_TAB_KEY, state.pdfInspectorTab);
+  applyPdfInspectorState();
+}
 function renderPdfAnnotationList(selectedId = null) {
   const annotations = currentPdfAnnotations();
+  el('pdf-inspector-count').textContent = String(annotations.length);
   el('pdf-annotation-list').innerHTML = annotations.length ? annotations.map((item, index) => `<article class="pdf-annotation-item ${selectedId === item.id ? 'selected' : ''}" style="border-left-color:${escapeHtml(item.color)}" data-pdf-annotation-id="${escapeHtml(item.id)}"><strong>${index + 1}. 第 ${item.page} 页 · ${annotationTypeLabel(item.type)}</strong>${item.text ? `<p>${escapeHtml(item.text.slice(0, 220))}</p>` : ''}${item.comment ? `<p>批注：${escapeHtml(item.comment)}</p>` : ''}<div class="pdf-annotation-actions"><button data-pdf-annotation-action="goto">定位</button><button data-pdf-annotation-action="comment">编辑批注</button><button data-pdf-annotation-action="delete">删除</button></div></article>`).join('') : '<div class="mono">暂无 PDF 标注。选择页面文字或使用区域工具开始标注。</div>';
 }
 async function persistPdfRecord() {
@@ -1136,13 +1165,52 @@ function pdfStableColumnBreaks(lines, bounds) {
   // paragraph must not be promoted to a page column. Real journal columns
   // repeat the same boundary across substantially more visual rows.
   const minimumSupport = Math.max(8, Math.min(12, Math.ceil(lines.length * .1)));
-  return clusters.map(cluster => {
+  const summaries = clusters.map(cluster => {
     const lineIndexes = [...new Set(cluster.values.map(value => value.lineIndex))].sort((a, b) => a - b);
+    const spans = cluster.values.map(value => value.columnSpan).sort((a, b) => a - b);
+    const gaps = cluster.values.map(value => value.gap).sort((a, b) => a - b);
     return {
       x: cluster.x, support: lineIndexes.length,
-      minLineIndex: lineIndexes[0], maxLineIndex: lineIndexes.at(-1), tolerance
+      minLineIndex: lineIndexes[0], maxLineIndex: lineIndexes.at(-1), tolerance,
+      medianSpan: spans[Math.floor(spans.length / 2)] || 0,
+      medianGap: gaps[Math.floor(gaps.length / 2)] || 0,
+      relative: (cluster.x - bounds.left) / bounds.width
     };
-  }).filter(value => value.support >= minimumSupport && value.maxLineIndex - value.minLineIndex >= 3).sort((a, b) => a.x - b.x);
+  }).filter(value => value.maxLineIndex - value.minLineIndex >= 3);
+  const strong = summaries.filter(value =>
+    value.support >= minimumSupport &&
+    value.medianSpan >= bounds.width * .32 &&
+    value.relative >= .38 && value.relative <= .62
+  );
+  const expected = Number.isFinite(state.pdfColumnTemplate) ? state.pdfColumnTemplate : .5;
+  let pool = strong;
+  // Once a reliable page has established the document gutter, sparse pages
+  // may reuse it with lower support. This does not affect standalone
+  // single-column PDFs because they never establish a template.
+  if (Number.isFinite(state.pdfColumnTemplate)) {
+    const weakSupport = Math.max(3, Math.ceil(minimumSupport * .4));
+    const nearTemplate = summaries.filter(value =>
+      value.support >= weakSupport &&
+      value.medianSpan >= bounds.width * .28 &&
+      Math.abs(value.relative - state.pdfColumnTemplate) <= .065
+    );
+    if (nearTemplate.length) pool = nearTemplate;
+  }
+  const selected = pool.sort((a, b) =>
+    Math.abs(a.relative - expected) - Math.abs(b.relative - expected) ||
+    b.support - a.support ||
+    b.medianSpan - a.medianSpan
+  )[0];
+  if (!selected) return [];
+  if (strong.includes(selected)) {
+    state.pdfColumnTemplate = Number.isFinite(state.pdfColumnTemplate)
+      ? state.pdfColumnTemplate * .72 + selected.relative * .28
+      : selected.relative;
+  }
+  // The reader currently models the dominant journal gutter. Returning every
+  // repeated x-position misclassifies equation alignment and list indents on
+  // later pages as extra columns, which clips selections into narrow strips.
+  return [selected];
 }
 function pdfColumnLaneForLeft(left, columnBreaks) {
   return columnBreaks.reduce((lane, value) => left >= value.x - value.tolerance ? lane + 1 : lane, 0);
@@ -1312,6 +1380,15 @@ function pdfRangeRectForFragment(fragment, start, end) {
   const range = document.createRange(); range.setStart(fragment.node, start); range.setEnd(fragment.node, end);
   return [...range.getClientRects()].filter(rect => rect.width > .15 && rect.height > .5);
 }
+function pdfRectInCapturedLayout(rect, layout, currentBounds) {
+  const offsetX = layout.bounds.left - currentBounds.left;
+  const offsetY = layout.bounds.top - currentBounds.top;
+  return {
+    left: rect.left + offsetX, right: rect.right + offsetX,
+    top: rect.top + offsetY, bottom: rect.bottom + offsetY,
+    width: rect.width, height: rect.height
+  };
+}
 function pdfVisualSelectionText(pieces) {
   let output = ''; let previous = null;
   for (const piece of pieces) {
@@ -1330,6 +1407,7 @@ function pdfVisualSelectionFromEndpoints(layout, start, end) {
   if (!pdfVisualSelectionSameColumn(layout, start, end)) return { error: '选区跨越了不同分栏，请分别选择每一栏' };
   const columnClip = pdfVisualColumnClip(layout, start, end);
   const laneAware = layout.columnBreaks.length > 0; const columnLane = startRun.columnLane;
+  const currentBounds = layout.layer.getBoundingClientRect();
   const selectedRuns = [];
   for (let lineIndex = startRun.lineIndex; lineIndex <= endRun.lineIndex; lineIndex += 1) {
     const line = layout.lines[lineIndex];
@@ -1344,7 +1422,15 @@ function pdfVisualSelectionFromEndpoints(layout, start, end) {
       const from = isFirst && fragment === start.fragment ? start.offset : fragment.start;
       const to = isLast && fragment === end.fragment ? end.offset : fragment.end;
       if (to <= from) continue;
-      const rects = pdfRangeRectForFragment(fragment, from, to).map(rect => pdfClampClientRect(rect, columnClip)).filter(Boolean); if (!rects.length) continue;
+      // Range rectangles are reported in the *current* viewport coordinate
+      // system. During a drag the user may wheel-scroll the stage, while
+      // layout.bounds intentionally remains the immutable pointerdown space.
+      // Translate new Range rectangles back into that captured space before
+      // normalizing them; otherwise every scroll delta becomes saved into the
+      // blue preview and all later highlights inherit the same offset.
+      const rects = pdfRangeRectForFragment(fragment, from, to)
+        .map(rect => pdfRectInCapturedLayout(rect, layout, currentBounds))
+        .map(rect => pdfClampClientRect(rect, columnClip)).filter(Boolean);
       clientRects.push(...rects);
       pieces.push({ text: fragment.node.textContent.slice(from, to), rect: pdfRectUnion(rects), lineIndex: run.lineIndex });
     }
@@ -1691,6 +1777,7 @@ function searchPdfText() {
     return `<button data-pdf-page="${item.page}"><b>第 ${item.page} 页</b><br>${escapeHtml(excerpt)}</button>`;
   }).join('') : '<div class="panel-note">全文中没有找到该关键词。</div>';
   container.classList.remove('hidden');
+  setPdfInspector(true, 'text');
 }
 async function removeAttachedPdf(paperId) {
   if (!confirm('移除本机保存的 PDF？收藏、笔记和论文元数据会保留。')) return;
@@ -1961,12 +2048,14 @@ function applyTranslationSettings() {
   el('translation-enabled').checked = translationSettings.enabled;
   el('translation-mode').value = translationSettings.mode;
   el('translation-word-click').checked = translationSettings.wordClick;
+  el('translation-word-click-mode').value = translationSettings.wordClickMode === 'direct' ? 'direct' : 'ctrl';
   el('translation-selection').checked = translationSettings.selection;
   el('translation-position-mode').value = translationSettings.positionMode;
   el('translation-endpoint').value = translationSettings.onlineEndpoint || '';
   el('translation-cache').checked = translationSettings.cache;
   el('translation-mode').disabled = !translationSettings.enabled;
   el('translation-word-click').disabled = !translationSettings.enabled;
+  el('translation-word-click-mode').disabled = !translationSettings.enabled || !translationSettings.wordClick;
   el('translation-selection').disabled = !translationSettings.enabled;
   el('translation-position-mode').disabled = !translationSettings.enabled;
   el('translation-endpoint').disabled = !translationSettings.enabled;
@@ -2541,6 +2630,7 @@ document.addEventListener('click', event => {
     if (!root && el('translation-popover').classList.contains('open')) closeTranslationPopover();
     return;
   }
+  if (translationSettings.wordClickMode !== 'direct' && !event.ctrlKey && !event.metaKey) return;
   const selection = window.getSelection(); if (selection && !selection.isCollapsed && normalizedTranslationText(selection.toString())) return;
   const word = wordAtPoint(event.clientX, event.clientY, root); if (word) showTranslation(word.text, word.rect, root, 'word');
 });
@@ -2660,6 +2750,9 @@ el('pdf-zoom').addEventListener('change', async event => { state.pdfScale = Numb
 el('pdf-search-button').addEventListener('click', searchPdfText);
 el('pdf-search-input').addEventListener('keydown', event => { if (event.key === 'Enter') searchPdfText(); });
 el('pdf-search-results').addEventListener('click', event => { const button = event.target.closest('[data-pdf-page]'); if (button) goToPdfPage(Number(button.dataset.pdfPage)); });
+el('pdf-inspector-toggle').addEventListener('click', () => setPdfInspector(!state.pdfInspectorOpen));
+el('pdf-inspector-close').addEventListener('click', () => setPdfInspector(false));
+document.querySelectorAll('[data-pdf-pane-tab]').forEach(button => button.addEventListener('click', () => setPdfInspector(true, button.dataset.pdfPaneTab)));
 el('pdf-copy-page').addEventListener('click', () => copyText(state.pdfRecord?.pages?.[state.pdfPage - 1] || '', '本页文本已复制'));
 el('pdf-reparse').addEventListener('click', reparsePdfText);
 el('pdf-ocr-page').addEventListener('click', ocrCurrentPdfPage);
@@ -2786,6 +2879,7 @@ el('translation-open').addEventListener('click', openTranslationSettings);
 el('translation-enabled').addEventListener('change', event => { translationSettings.enabled = event.target.checked; saveTranslationSettings(); if (translationSettings.enabled) detectTranslationCapability(); });
 el('translation-mode').addEventListener('change', event => { translationSettings.mode = event.target.value; saveTranslationSettings(); });
 el('translation-word-click').addEventListener('change', event => { translationSettings.wordClick = event.target.checked; saveTranslationSettings(); });
+el('translation-word-click-mode').addEventListener('change', event => { translationSettings.wordClickMode = event.target.value === 'direct' ? 'direct' : 'ctrl'; saveTranslationSettings(); });
 el('translation-selection').addEventListener('change', event => { translationSettings.selection = event.target.checked; saveTranslationSettings(); });
 el('translation-position-mode').addEventListener('change', event => {
   translationSettings.positionMode = event.target.value;

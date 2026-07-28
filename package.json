@@ -1,11 +1,12 @@
 {
   "name": "paperscope",
-  "version": "6.3.4",
+  "version": "6.3.5",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build-static.mjs",
-    "start": "node scripts/preview.mjs"
+    "start": "node scripts/preview.mjs",
+    "test:pdf-selection": "node scripts/check-pdf-selection.mjs"
   },
   "engines": {
     "node": ">=18"
