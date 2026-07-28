@@ -319,16 +319,24 @@ async function build() {
   await rm(dist, { recursive: true, force: true });
   await Promise.all([
     mkdir(path.join(dist, 'data'), { recursive: true }),
-    mkdir(path.join(dist, 'vendor', 'pdfjs'), { recursive: true })
+    mkdir(path.join(dist, 'vendor', 'pdfjs'), { recursive: true }),
+    mkdir(path.join(dist, 'vendor', 'pdf-lib'), { recursive: true }),
+    mkdir(path.join(dist, 'vendor', 'tesseract'), { recursive: true }),
+    mkdir(path.join(dist, 'vendor', 'tesseract-core'), { recursive: true })
   ]);
   await Promise.all([
     ...STATIC_FILES.map(file => copyFile(path.join(root, file), path.join(dist, file))),
     cp(path.join(root, 'data', 'dictionary'), path.join(dist, 'data', 'dictionary'), { recursive: true }),
     copyFile(path.join(root, 'node_modules', 'pdfjs-dist', 'build', 'pdf.mjs'), path.join(dist, 'vendor', 'pdfjs', 'pdf.mjs')),
     copyFile(path.join(root, 'node_modules', 'pdfjs-dist', 'build', 'pdf.worker.mjs'), path.join(dist, 'vendor', 'pdfjs', 'pdf.worker.mjs')),
+    copyFile(path.join(root, 'node_modules', 'pdfjs-dist', 'web', 'pdf_viewer.css'), path.join(dist, 'vendor', 'pdfjs', 'pdf_viewer.css')),
     cp(path.join(root, 'node_modules', 'pdfjs-dist', 'cmaps'), path.join(dist, 'vendor', 'pdfjs', 'cmaps'), { recursive: true }),
     cp(path.join(root, 'node_modules', 'pdfjs-dist', 'standard_fonts'), path.join(dist, 'vendor', 'pdfjs', 'standard_fonts'), { recursive: true }),
-    cp(path.join(root, 'node_modules', 'pdfjs-dist', 'wasm'), path.join(dist, 'vendor', 'pdfjs', 'wasm'), { recursive: true })
+    cp(path.join(root, 'node_modules', 'pdfjs-dist', 'wasm'), path.join(dist, 'vendor', 'pdfjs', 'wasm'), { recursive: true }),
+    copyFile(path.join(root, 'node_modules', 'pdf-lib', 'dist', 'pdf-lib.esm.min.js'), path.join(dist, 'vendor', 'pdf-lib', 'pdf-lib.mjs')),
+    copyFile(path.join(root, 'node_modules', 'tesseract.js', 'dist', 'tesseract.esm.min.js'), path.join(dist, 'vendor', 'tesseract', 'tesseract.mjs')),
+    copyFile(path.join(root, 'node_modules', 'tesseract.js', 'dist', 'worker.min.js'), path.join(dist, 'vendor', 'tesseract', 'worker.min.js')),
+    cp(path.join(root, 'node_modules', 'tesseract.js-core'), path.join(dist, 'vendor', 'tesseract-core'), { recursive: true })
   ]);
   const json = (name, data) => writeFile(path.join(dist, 'data', `${name}.json`), JSON.stringify(data, null, 2));
   const collectionErrors = collectionResults.filter(item => item.error).map(item => `${item.name}：${item.error}`);

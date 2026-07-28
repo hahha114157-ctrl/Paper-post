@@ -1,6 +1,6 @@
 {
   "name": "paperscope",
-  "version": "6.1.0",
+  "version": "6.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -11,6 +11,8 @@
     "node": ">=18"
   },
   "dependencies": {
-    "pdfjs-dist": "6.1.200"
+    "pdf-lib": "1.17.1",
+    "pdfjs-dist": "6.1.200",
+    "tesseract.js": "7.0.0"
   }
 }
