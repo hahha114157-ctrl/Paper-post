@@ -27,6 +27,10 @@ jobs:
           cache: npm
       - name: Install pinned dependencies
         run: npm ci
+      - name: Run regression tests
+        run: npm test
+      - name: Verify deterministic offline build
+        run: npm run build:fixture
       - name: Build static research digest
         run: npm run build
         env:

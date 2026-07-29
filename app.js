@@ -1,4 +1,29 @@
-const APP_VERSION = '6.3.5';
+import {
+  deletePdfAttachment,
+  deletePdfImportJob,
+  estimateStorage,
+  getPdfBundle,
+  listPdfDocuments,
+  loadPendingPdfImportJobs,
+  movePdfAttachment,
+  openPdfDatabase,
+  putPdfAnnotations,
+  putPdfBundle,
+  putPdfTextState,
+  savePdfImportJob,
+  searchPdfTextIndex
+} from './pdf-storage.js';
+import {
+  derivePdfMetadata,
+  findPdfPaperMatch,
+  isRecordRead,
+  libraryStatistics,
+  pdfFileFingerprint,
+  recordHasNotes,
+  setRecordRead
+} from './library-logic.js';
+
+const APP_VERSION = '6.4.0';
 const STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
 const LEGACY_SAVED_KEY = 'paperscope-saved';
@@ -9,11 +34,10 @@ const LEGACY_TRANSLATION_SETTINGS_KEY = 'paperscope-translation-settings-v1';
 const TRANSLATION_CACHE_KEY = 'paperscope-translation-cache-v2';
 const LEGACY_TRANSLATION_CACHE_KEY = 'paperscope-translation-cache-v1';
 const TRANSLATION_HISTORY_KEY = 'paperscope-translation-history-v1';
-const PDF_DB_NAME = 'paperscope-pdf-library-v1';
-const PDF_STORE_NAME = 'pdfs';
 const PDF_VIEW_MODE_KEY = 'paperscope-pdf-view-mode-v1';
 const PDF_INSPECTOR_OPEN_KEY = 'paperscope-pdf-inspector-open-v1';
 const PDF_INSPECTOR_TAB_KEY = 'paperscope-pdf-inspector-tab-v1';
+const UI_SETTINGS_KEY = 'paperscope-ui-settings-v1';
 const TRANSLATION_DEFAULTS = {
   enabled: true, wordClick: true, selection: true, cache: true, mode: 'auto',
   wordClickMode: 'ctrl', positionMode: 'follow', position: null, onlineEndpoint: ''
@@ -61,6 +85,7 @@ const state = {
   pdfInspectorTab: localStorage.getItem(PDF_INSPECTOR_TAB_KEY) === 'text' ? 'text' : 'annotations',
   pdfColumnTemplate: null,
   pdfContinuousObserver: null, pdfPageObserver: null, pdfContinuousTasks: new Map(), pdfPageVisibility: new Map(),
+  pdfImportQueue: [], pdfImportActive: false, pdfImportCancelId: null,
   lineageRequestId: 0,
   serviceWorkerRegistration: null, updateReloading: false
 };
@@ -94,7 +119,25 @@ let translationSettings = {
 };
 let translationCache = { ...readJson(LEGACY_TRANSLATION_CACHE_KEY, {}), ...readJson(TRANSLATION_CACHE_KEY, {}) };
 let translationHistory = readJson(TRANSLATION_HISTORY_KEY, []);
-function saveLibrary() { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(library)); } catch { toast('浏览器存储空间不足，请导出备份'); } }
+const UI_DEFAULTS = {
+  preset: 'classic',
+  theme: localStorage.getItem(THEME_KEY) || 'system',
+  density: 'standard',
+  fontScale: 1,
+  sidebar: 'expanded',
+  reduceMotion: matchMedia('(prefers-reduced-motion: reduce)').matches
+};
+let uiSettings = { ...UI_DEFAULTS, ...readJson(UI_SETTINGS_KEY, {}) };
+let appearanceSnapshot = null;
+function saveLibrary() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(library));
+    return true;
+  } catch {
+    toast('浏览器存储空间不足，本次修改未能持久保存，请立即导出备份');
+    return false;
+  }
+}
 function escapeHtml(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]); }
 function safeUrl(value = '') { try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : '#'; } catch { return '#'; } }
 function toast(text) { const node = el('toast'); node.textContent = text; node.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => node.classList.remove('show'), 2700); }
@@ -143,7 +186,9 @@ function ensureRecord(paper) {
     lastOpenedAt: old.lastOpenedAt || null, progress: Number(old.progress || 0), note: old.note || '', tags: Array.isArray(old.tags) ? old.tags : [],
     highlights: Array.isArray(old.highlights) ? old.highlights : [], collections: Array.isArray(old.collections) ? old.collections : [],
     publication: old.publication || paper.publication || null, abstractTranslation: old.abstractTranslation || null,
-    pdfAttachment: old.pdfAttachment || null, lineage: old.lineage || null, metadataOverrides: old.metadataOverrides || null
+    pdfAttachment: old.pdfAttachment || null,
+    pdfAttachments: Array.isArray(old.pdfAttachments) ? old.pdfAttachments : old.pdfAttachment ? [old.pdfAttachment] : [],
+    lineage: old.lineage || null, metadataOverrides: old.metadataOverrides || null
   };
   return library.records[paper.id];
 }
@@ -221,13 +266,7 @@ function completeDaily() {
 function queueDaily() { const recommendation = todayRecommendation(); if (!recommendation) return toast('今日推荐尚未生成'); const record = ensureRecord(getPaper(recommendation.paperId)); record.queueAt ||= new Date().toISOString(); saveLibrary(); renderCurrentView(); toast('已加入阅读队列'); }
 function openDaily() { const recommendation = todayRecommendation(); if (recommendation) openPaperRoute(recommendation.paperId); }
 function libraryStats() {
-  const records = Object.values(library.records).filter(record => record?.paper);
-  return {
-    saved: records.filter(record => record.savedAt).length, queue: records.filter(record => record.queueAt).length,
-    read: records.filter(record => record.readAt).length, notes: records.filter(record => record.note || record.highlights?.length).length,
-    published: records.filter(record => record.savedAt && publicationInfo(record, record.paper).status === 'published').length,
-    terms: Object.keys(library.vocabulary || {}).length
-  };
+  return libraryStatistics(library, record => publicationInfo(record, record.paper).status);
 }
 function renderHome() {
   const ai = state.datasets.ai; const arch = state.datasets.architecture; const stats = libraryStats();
@@ -265,7 +304,7 @@ function filterPapers(area, filters) {
     if (filters.status === 'preprint' && publicationInfo(record, paper).status === 'published') return false;
     if (filters.status === 'published' && publicationInfo(record, paper).status !== 'published') return false;
     if (filters.status === 'saved' && !record?.savedAt) return false;
-    if (filters.status === 'unread' && record?.readAt) return false;
+    if (filters.status === 'unread' && isRecordRead(record)) return false;
     return true;
   });
   return items.sort((a, b) => filters.sort === 'recommended' ? Number(b.qualityScore || 0) - Number(a.qualityScore || 0) || new Date(b.published) - new Date(a.published) : filters.sort === 'oldest' ? new Date(a.published) - new Date(b.published) : filters.sort === 'title' ? a.title.localeCompare(b.title) : new Date(b.published) - new Date(a.published));
@@ -287,7 +326,7 @@ function renderPaperPage(area, route) {
 }
 function paperRow(paper, index) {
   const record = getRecord(paper.id); const info = publicationInfo(record, paper); const checked = state.compare.has(paper.id);
-  return `<article class="paper-row ${record?.readAt ? 'read' : ''}" data-paper-id="${escapeHtml(paper.id)}"><input class="check" type="checkbox" data-action="compare" aria-label="加入对比" ${checked ? 'checked' : ''}><span class="paper-index">${String(index).padStart(2, '0')}</span><div class="paper-main"><button class="paper-title" data-action="open"><h3 data-translatable>${escapeHtml(paper.title)}</h3></button><p data-translatable>${escapeHtml(paper.abstract)}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span>${paper.quality?.tier ? `<span class="tag quality-badge">${escapeHtml(paper.quality.tier)} · ${paper.qualityScore}</span>` : ''}<span class="tag venue-badge">${escapeHtml(`${paper.venueName || paper.venue || paper.source}${paper.venueYear ? ` ${paper.venueYear}` : ''}`)}</span><span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.status === 'published' ? '正式收录' : '预印本')}</span><span class="tag">${escapeHtml(paperDateText(paper))}</span>${record?.note ? '<span class="tag note">有笔记</span>' : ''}${paperTopics(paper).map(topic => `<span class="tag">${escapeHtml(topic)}</span>`).join('')}</div></div><div class="paper-actions"><button data-action="read" class="${record?.readAt ? 'active' : ''}" title="已读">✓</button><button data-action="queue" class="${record?.queueAt ? 'active' : ''}" title="阅读队列">＋</button><button data-action="save" class="${record?.savedAt ? 'saved' : ''}" title="收藏">${record?.savedAt ? '★' : '☆'}</button></div></article>`;
+  return `<article class="paper-row ${isRecordRead(record) ? 'read' : ''}" data-paper-id="${escapeHtml(paper.id)}"><input class="check" type="checkbox" data-action="compare" aria-label="加入对比" ${checked ? 'checked' : ''}><span class="paper-index">${String(index).padStart(2, '0')}</span><div class="paper-main"><button class="paper-title" data-action="open"><h3 data-translatable>${escapeHtml(paper.title)}</h3></button><p data-translatable>${escapeHtml(paper.abstract)}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span>${paper.quality?.tier ? `<span class="tag quality-badge">${escapeHtml(paper.quality.tier)} · ${paper.qualityScore}</span>` : ''}<span class="tag venue-badge">${escapeHtml(`${paper.venueName || paper.venue || paper.source}${paper.venueYear ? ` ${paper.venueYear}` : ''}`)}</span><span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.status === 'published' ? '正式收录' : '预印本')}</span><span class="tag">${escapeHtml(paperDateText(paper))}</span>${record?.note ? '<span class="tag note">有笔记</span>' : ''}${paperTopics(paper).map(topic => `<span class="tag">${escapeHtml(topic)}</span>`).join('')}</div></div><div class="paper-actions"><button data-action="read" class="${isRecordRead(record) ? 'active' : ''}" title="已读" aria-label="切换已读状态">✓</button><button data-action="queue" class="${record?.queueAt ? 'active' : ''}" title="阅读队列" aria-label="切换阅读队列">＋</button><button data-action="save" class="${record?.savedAt ? 'saved' : ''}" title="收藏" aria-label="切换收藏">${record?.savedAt ? '★' : '☆'}</button></div></article>`;
 }
 function renderPagination(target, page, total, onPage) {
   const node = el(target); if (total <= 1) { node.innerHTML = ''; return; }
@@ -309,8 +348,14 @@ function renderCuratedPage(route) {
 
 function toggleRecordField(id, field) {
   const record = ensureRecord(getPaper(id)); if (!record) return;
+  if (field === 'read') {
+    const next = !isRecordRead(record);
+    setRecordRead(record, next);
+    saveLibrary(); renderCurrentView(); renderDrawerActions();
+    toast(next ? '已标记为已读' : '已取消已读并重置进度');
+    return;
+  }
   const value = `${field}At`; record[value] = record[value] ? null : new Date().toISOString();
-  if (field === 'read' && record.readAt) record.progress = Math.max(record.progress || 0, 100);
   saveLibrary(); renderCurrentView(); renderDrawerActions();
   toast(record[value] ? field === 'saved' ? '已收藏' : field === 'queue' ? '已加入阅读队列' : '已标记为已读' : '已取消');
 }
@@ -346,7 +391,7 @@ function libraryRecords(tab, collectionId, q, smart = 'unread') {
     if (tab === 'saved') return Boolean(record.savedAt);
     if (tab === 'queue') return Boolean(record.queueAt);
     if (tab === 'recent') return Boolean(record.lastOpenedAt);
-    if (tab === 'notes') return Boolean(record.note || record.highlights?.length || record.pdfAttachment?.annotationCount);
+    if (tab === 'notes') return recordHasNotes(record);
     if (tab === 'published') return Boolean(record.savedAt && publicationInfo(record, record.paper).status === 'published');
     if (tab === 'collections') return collectionId && collectionId !== 'all' ? record.collections?.includes(collectionId) : Boolean(record.collections?.length);
     if (tab === 'unfiled') return Boolean((record.savedAt || record.pdfAttachment) && !record.collections?.length);
@@ -357,7 +402,7 @@ function libraryRecords(tab, collectionId, q, smart = 'unread') {
       if (smart === 'recent-add') return Date.now() - new Date(record.savedAt || record.pdfAttachment?.importedAt || 0).getTime() <= 7 * 86400_000;
       if (smart === 'needs-metadata') return !paper.title || !(paper.authors || []).length || (!paper.doi && !paper.arxivId);
       if (smart === 'pdf-search') return Boolean(state.libraryPdfMatches?.has(id));
-      return !record.readAt && Number(record.progress || 0) < 100;
+      return !isRecordRead(record);
     }
     return true;
   }).sort(([, a], [, b]) => new Date(b.queueAt || b.savedAt || b.lastOpenedAt || b.readAt || 0) - new Date(a.queueAt || a.savedAt || a.lastOpenedAt || a.readAt || 0));
@@ -366,6 +411,7 @@ function renderLibraryPage(route) {
   renderProfile(); const tab = route.parts[1] || 'saved'; const q = route.query.q || ''; const collectionId = route.query.collection || 'all'; const smart = route.query.smart || 'unread'; const page = Math.max(1, Number(route.query.page || 1));
   const stats = libraryStats(); for (const [name, value] of Object.entries(stats)) el(`stat-${name}`).textContent = value;
   document.querySelectorAll('#library-tabs [data-tab]').forEach(button => button.classList.toggle('active', button.dataset.tab === tab));
+  el('library-tab-select').value = tab;
   el('library-batchbar').classList.toggle('hidden', ['vocabulary', 'translations'].includes(tab));
   el('collection-tools').classList.toggle('hidden', tab !== 'collections'); renderCollectionOptions(collectionId);
   el('smart-tools').classList.toggle('hidden', tab !== 'smart'); el('smart-filter').value = smart;
@@ -380,7 +426,7 @@ function renderLibraryPage(route) {
 }
 function libraryRow(id, record) {
   const paper = getPaper(id) || record.paper; const info = publicationInfo(record, paper); const names = (record.collections || []).map(collectionId => library.collections[collectionId]?.name).filter(Boolean);
-  return `<article class="library-row" data-library-id="${escapeHtml(id)}"><input class="check" type="checkbox" data-library-select aria-label="选择论文"><div><h3 data-translatable>${escapeHtml(paper.title)}</h3><p data-translatable>${escapeHtml(record.note || paper.abstract || '')}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span><span class="tag">进度 ${record.progress || 0}%</span>${record.pdfAttachment ? `<span class="tag published">本地 PDF · ${record.pdfAttachment.pageCount} 页</span>` : ''}${record.pdfAttachment?.annotationCount ? `<span class="tag note">${record.pdfAttachment.annotationCount} 条 PDF 标注</span>` : ''}${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${(record.tags || []).slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}${names.map(name => `<span class="tag"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="paper-actions">${record.pdfAttachment ? '<button data-library-action="pdf">阅读 PDF</button>' : ''}<button data-library-action="compare">对比</button><button data-library-action="open">查看</button><button data-library-action="save" class="${record.savedAt ? 'saved' : ''}">${record.savedAt ? '★' : '☆'}</button></div></article>`;
+  return `<article class="library-row" data-library-id="${escapeHtml(id)}"><input class="check" type="checkbox" data-library-select aria-label="选择论文"><div><h3 data-translatable>${escapeHtml(paper.title)}</h3><p data-translatable>${escapeHtml(record.note || paper.abstract || '')}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span><span class="tag">进度 ${record.progress || 0}%</span>${record.pdfAttachment ? `<span class="tag published">本地 PDF · ${record.pdfAttachment.pageCount} 页${(record.pdfAttachments?.length || 0) > 1 ? ` · ${record.pdfAttachments.length} 个版本` : ''}</span>` : ''}${record.pdfAttachment?.annotationCount ? `<span class="tag note">${record.pdfAttachment.annotationCount} 条 PDF 标注</span>` : ''}${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${(record.tags || []).slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}${names.map(name => `<span class="tag"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="paper-actions">${record.pdfAttachment ? '<button data-library-action="pdf">阅读 PDF</button>' : ''}<button data-library-action="compare">对比</button><button data-library-action="open">查看</button><button data-library-action="save" class="${record.savedAt ? 'saved' : ''}" aria-label="切换收藏">${record.savedAt ? '★' : '☆'}</button></div></article>`;
 }
 function renderVocabularyPage(route) {
   const q = (route.query.q || '').trim().toLowerCase(); const page = Math.max(1, Number(route.query.page || 1));
@@ -427,13 +473,9 @@ function renderCollectionOptions(selected) {
 }
 async function searchLocalPdfLibrary() {
   const query = el('library-pdf-search').value.trim().toLowerCase(); if (query.length < 2) return toast('请输入至少 2 个字符');
-  const button = el('library-pdf-search-button'); button.disabled = true; button.textContent = '检索中…'; const matches = new Set();
+  const button = el('library-pdf-search-button'); button.disabled = true; button.textContent = '检索中…';
   try {
-    const entries = Object.entries(library.records).filter(([, record]) => record.pdfAttachment);
-    for (const [id] of entries) {
-      const stored = await getStoredPdf(id).catch(() => null);
-      if ((stored?.pages || []).some(text => String(text).toLowerCase().includes(query))) matches.add(id);
-    }
+    const matches = await searchPdfTextIndex(query);
     state.libraryPdfMatches = matches; navigate('library/smart', { smart: 'pdf-search', pdfq: query, page: 1 }); toast(`PDF 全文找到 ${matches.size} 篇`);
   } finally { button.disabled = false; button.textContent = '全文检索'; }
 }
@@ -451,11 +493,17 @@ async function mergeSelectedDuplicates() {
     target.highlights = [...(target.highlights || []), ...(source.highlights || []).filter(item => !(target.highlights || []).some(old => old.id === item.id))];
     target.note = [target.note, source.note].filter(Boolean).filter((value, index, values) => values.indexOf(value) === index).join('\n\n');
     target.publication ||= source.publication; target.abstractTranslation ||= source.abstractTranslation; target.lineage ||= source.lineage;
-    if (!target.pdfAttachment && source.pdfAttachment) {
-      const stored = await getStoredPdf(sourceId).catch(() => null);
-      if (stored) { stored.paperId = targetId; await putStoredPdf(stored); target.pdfAttachment = pdfAttachmentMeta(stored, source.pdfAttachment); }
+    const sourceDocuments = (await listPdfDocuments().catch(() => [])).filter(document => document.paperId === sourceId);
+    for (const document of sourceDocuments) {
+      const previous = [source.pdfAttachment, ...(source.pdfAttachments || [])].find(item => item?.attachmentId === document.attachmentId) || {};
+      const primary = !target.pdfAttachment;
+      const moved = await movePdfAttachment(sourceId, targetId, document.attachmentId, { primary });
+      if (!moved) continue;
+      const metadata = pdfAttachmentMeta(moved, previous);
+      if (primary) target.pdfAttachment = metadata;
+      target.pdfAttachments = [target.pdfAttachment, ...(target.pdfAttachments || []), metadata]
+        .filter((item, index, items) => item && items.findIndex(value => value.attachmentId === item.attachmentId) === index);
     }
-    await deleteStoredPdf(sourceId).catch(() => {});
     delete library.records[sourceId];
   }
   state.batch = new Set([targetId]); saveLibrary(); renderRoute(); toast(`已合并 ${ids.length} 条重复记录`);
@@ -515,7 +563,7 @@ function closeDrawer(navigateBack = true) {
 }
 function renderDrawerActions() {
   const paper = getPaper(state.selectedPaperId); const record = getRecord(state.selectedPaperId); if (!paper) return; const info = publicationInfo(record, paper);
-  el('detail-save').textContent = record?.savedAt ? '★ 已收藏' : '☆ 收藏'; el('detail-queue').textContent = record?.queueAt ? '✓ 已在队列' : '＋ 阅读队列'; el('detail-read').textContent = record?.readAt ? '✓ 已读' : '○ 标为已读'; el('detail-compare').textContent = state.compare.has(paper.id) ? '移出对比' : '加入对比';
+  el('detail-save').textContent = record?.savedAt ? '★ 已收藏' : '☆ 收藏'; el('detail-queue').textContent = record?.queueAt ? '✓ 已在队列' : '＋ 阅读队列'; el('detail-read').textContent = isRecordRead(record) ? '✓ 已读' : '○ 标为已读'; el('detail-compare').textContent = state.compare.has(paper.id) ? '移出对比' : '加入对比';
   el('detail-publication-status').textContent = info.label; el('detail-publication-status').className = `tag ${info.status === 'published' ? 'published' : ''}`;
 }
 function renderHighlights() {
@@ -580,36 +628,85 @@ function markdownFor(paper) { return `- **${paper.title}** — ${(paper.authors 
 async function copyText(text, message) { try { await navigator.clipboard.writeText(text); toast(message); } catch { const box = document.createElement('textarea'); box.value = text; document.body.appendChild(box); box.select(); document.execCommand('copy'); box.remove(); toast(message); } }
 function downloadText(name, text, type = 'text/plain') { const blob = new Blob([text], { type }); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = name; link.click(); URL.revokeObjectURL(url); }
 function exportLibrary() { downloadText(`paperscope-library-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify({ ...library, exportedAt: new Date().toISOString(), app: 'PaperScope' }, null, 2), 'application/json'); toast('文献库已导出'); }
+async function writeDirectoryFile(directory, name, value) {
+  const handle = await directory.getFileHandle(name, { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(value);
+  await writable.close();
+}
+async function exportCompleteBackup() {
+  if (!('showDirectoryPicker' in window)) {
+    exportLibrary();
+    return toast('当前浏览器不支持目录备份，已导出文献 JSON；请在 Chromium PWA 中使用完整备份');
+  }
+  try {
+    const root = await window.showDirectoryPicker({ mode: 'readwrite', id: 'paperscope-backup' });
+    const folder = await root.getDirectoryHandle(`PaperScope-${new Date().toISOString().slice(0, 10)}`, { create: true });
+    const pdfFolder = await folder.getDirectoryHandle('pdf', { create: true });
+    const annotationFolder = await folder.getDirectoryHandle('annotations', { create: true });
+    const documents = await listPdfDocuments();
+    const manifest = [];
+    for (const [index, document] of documents.entries()) {
+      setPdfProgress(index / Math.max(1, documents.length) * 100, `备份附件 ${index + 1}/${documents.length}`);
+      const stem = `${String(index + 1).padStart(3, '0')}-${safePdfFileStem(document.fileName)}`;
+      await writeDirectoryFile(pdfFolder, `${stem}.pdf`, document.blob);
+      const bundle = await getPdfBundle(document.paperId, document.attachmentId);
+      await writeDirectoryFile(annotationFolder, `${stem}.json`, JSON.stringify({
+        schema: 'paperscope-pdf-annotations-v1',
+        paperId: document.paperId,
+        attachmentId: document.attachmentId,
+        pageCount: document.pageCount,
+        annotations: bundle?.annotations || []
+      }, null, 2));
+      manifest.push({ paperId: document.paperId, attachmentId: document.attachmentId, fileName: document.fileName, backupFile: `${stem}.pdf`, fingerprint: document.fingerprint });
+    }
+    await writeDirectoryFile(folder, 'paperscope-library.json', JSON.stringify({ ...library, exportedAt: new Date().toISOString(), app: 'PaperScope' }, null, 2));
+    await writeDirectoryFile(folder, 'manifest.json', JSON.stringify({ schema: 'paperscope-complete-backup-v1', exportedAt: new Date().toISOString(), attachments: manifest }, null, 2));
+    setPdfProgress(100, '完整备份已完成');
+    toast(`完整备份完成：${documents.length} 个附件`);
+  } catch (error) {
+    if (error?.name !== 'AbortError') toast(`完整备份失败：${error.message}`);
+  }
+}
 async function importLibraryFile(file) {
-  try { const value = JSON.parse(await file.text()); if (![2, 3].includes(value.version) || !value.records) throw new Error('不是有效的 PaperScope 备份'); if (!confirm(`将导入 ${Object.keys(value.records).length} 条记录并覆盖当前文献库，是否继续？`)) return; localStorage.setItem(value.version === 3 ? STORAGE_KEY : V2_STORAGE_KEY, JSON.stringify(value)); library = migrateLibrary(); saveLibrary(); renderRoute(); toast('导入完成'); } catch (error) { toast(error.message || '导入失败'); }
+  try {
+    const value = JSON.parse(await file.text());
+    if (![2, 3].includes(value.version) || !value.records || typeof value.records !== 'object') throw new Error('不是有效的 PaperScope 备份');
+    if (!confirm(`将合并导入 ${Object.keys(value.records).length} 条记录。当前文献和本机 PDF 不会被整体覆盖，是否继续？`)) return;
+    const importedRecords = Object.fromEntries(Object.entries(value.records).filter(([, record]) => record?.paper).map(([id, incoming]) => {
+      const existing = library.records[id] || {};
+      return [id, {
+        ...existing,
+        ...incoming,
+        savedAt: incoming.savedAt || existing.savedAt || null,
+        queueAt: incoming.queueAt || existing.queueAt || null,
+        lastOpenedAt: incoming.lastOpenedAt || incoming.readAt || existing.lastOpenedAt || null,
+        progress: Math.max(Number(existing.progress || 0), Number(incoming.progress || 0)),
+        tags: [...new Set([...(existing.tags || []), ...(incoming.tags || [])])],
+        collections: [...new Set([...(existing.collections || []), ...(incoming.collections || [])])],
+        highlights: [...(existing.highlights || []), ...(incoming.highlights || []).filter(item => !(existing.highlights || []).some(old => old.id === item.id))],
+        pdfAttachment: existing.pdfAttachment || incoming.pdfAttachment || null,
+        pdfAttachments: existing.pdfAttachments || (existing.pdfAttachment ? [existing.pdfAttachment] : [])
+      }];
+    }));
+    library = {
+      ...library,
+      profile: { ...library.profile, ...(value.profile || {}) },
+      records: { ...library.records, ...importedRecords },
+      collections: { ...library.collections, ...(value.collections || {}) },
+      savedVenues: [...new Set([...(library.savedVenues || []), ...(value.savedVenues || [])])],
+      dailyProgress: { ...library.dailyProgress, ...(value.dailyProgress || {}) },
+      vocabulary: { ...library.vocabulary, ...(value.vocabulary || {}) }
+    };
+    if (!saveLibrary()) throw new Error('导入内容无法写入浏览器存储');
+    await repairPdfLibrary({ notify: false });
+    renderRoute(); toast('合并导入完成');
+  } catch (error) { toast(error.message || '导入失败'); }
 }
 
-function openPdfDb() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(PDF_DB_NAME, 1);
-    request.onupgradeneeded = () => {
-      if (!request.result.objectStoreNames.contains(PDF_STORE_NAME)) request.result.createObjectStore(PDF_STORE_NAME, { keyPath: 'paperId' });
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error || new Error('无法打开本地 PDF 数据库'));
-  });
-}
-async function pdfStoreOperation(mode, operation) {
-  const db = await openPdfDb();
-  try {
-    return await new Promise((resolve, reject) => {
-      const transaction = db.transaction(PDF_STORE_NAME, mode);
-      const store = transaction.objectStore(PDF_STORE_NAME);
-      const request = operation(store);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error || new Error('本地 PDF 存储失败'));
-      transaction.onabort = () => reject(transaction.error || new Error('本地 PDF 事务已中止'));
-    });
-  } finally { db.close(); }
-}
-const getStoredPdf = paperId => pdfStoreOperation('readonly', store => store.get(paperId));
-const putStoredPdf = value => pdfStoreOperation('readwrite', store => store.put(value));
-const deleteStoredPdf = paperId => pdfStoreOperation('readwrite', store => store.delete(paperId));
+const getStoredPdf = (paperId, attachmentId = null) => getPdfBundle(paperId, attachmentId);
+const putStoredPdf = value => putPdfBundle(value);
+const deleteStoredPdf = (paperId, attachmentId = null) => deletePdfAttachment(paperId, attachmentId);
 
 async function loadPdfModule() {
   if (state.pdfModule) return state.pdfModule;
@@ -682,6 +779,7 @@ function setPdfProgress(value, label) {
   if (label && el('pdf-status')) el('pdf-status').textContent = label;
 }
 function storedPdfDefaults(stored) {
+  if (!stored) return null;
   stored.pages ||= Array.from({ length: stored.pageCount || 0 }, () => '');
   stored.annotations ||= [];
   stored.ocrPages ||= {};
@@ -689,45 +787,111 @@ function storedPdfDefaults(stored) {
   stored.schemaVersion ||= 2;
   return stored;
 }
-async function parseAndStorePdf(file, paperId) {
+function updatePdfImportProgress(jobId, value, label) {
+  setPdfProgress(value, label);
+  if (!jobId) return;
+  const job = state.pdfImportQueue.find(item => item.id === jobId);
+  if (!job) return;
+  job.progress = Math.round(value);
+  job.message = label;
+  renderPdfImportQueue();
+}
+async function repairPdfLibrary({ notify = true } = {}) {
+  const documents = await listPdfDocuments().catch(() => []);
+  const byPaper = new Map();
+  for (const document of documents) {
+    if (!byPaper.has(document.paperId)) byPaper.set(document.paperId, []);
+    byPaper.get(document.paperId).push(document);
+  }
+  let repaired = 0; let missing = 0;
+  for (const [paperId, record] of Object.entries(library.records)) {
+    if (!record?.pdfAttachment) continue;
+    const candidates = byPaper.get(paperId) || [];
+    const document = candidates.find(item => item.attachmentId === record.pdfAttachment.attachmentId) || candidates[0];
+    if (!document) {
+      record.pdfAttachment.missing = true;
+      missing += 1;
+      continue;
+    }
+    if (record.pdfAttachment.missing || !record.pdfAttachment.attachmentId) {
+      const bundle = await getPdfBundle(paperId, document.attachmentId);
+      record.pdfAttachment = pdfAttachmentMeta(bundle, record.pdfAttachment);
+      record.pdfAttachments = [record.pdfAttachment, ...(record.pdfAttachments || []).filter(item => item.attachmentId !== record.pdfAttachment.attachmentId)];
+      repaired += 1;
+    }
+  }
+  for (const document of documents.filter(item => !library.records[item.paperId])) {
+    const bundle = await getPdfBundle(document.paperId, document.attachmentId);
+    const id = document.paperId.startsWith('local:') ? document.paperId : `local:recovered-${document.attachmentId}`;
+    const metadata = derivePdfMetadata(bundle, { name: document.fileName });
+    const paper = {
+      id, title: metadata.title || document.fileName, abstract: metadata.excerpt, authors: metadata.authors,
+      published: null, venue: '恢复的本地 PDF', venueName: '恢复的本地 PDF', source: '附件修复',
+      kind: 'local', area: localPdfArea(metadata), link: metadata.doi ? `https://doi.org/${metadata.doi}` : '', doi: metadata.doi, qualityScore: 0, citationCount: 0
+    };
+    if (id !== document.paperId) await movePdfAttachment(document.paperId, id, document.attachmentId);
+    const record = ensureRecord(paper);
+    record.savedAt ||= new Date().toISOString();
+    record.pdfAttachment = pdfAttachmentMeta(bundle);
+    record.pdfAttachments = [record.pdfAttachment];
+    repaired += 1;
+  }
+  if (repaired || missing) saveLibrary();
+  if (notify) toast(`附件检查完成：修复 ${repaired} 项，缺失 ${missing} 项`);
+  return { repaired, missing };
+}
+async function parseAndStorePdf(file, paperId, { attachmentId = null, preserveAnnotations = true, jobId = null, fingerprint = null } = {}) {
   if (!file || (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf')) throw new Error('请选择 PDF 文件');
   if (file.size > 150 * 1024 * 1024) throw new Error('单个 PDF 不能超过 150 MB');
   const header = new TextDecoder('latin1').decode(await file.slice(0, 5).arrayBuffer());
   if (header !== '%PDF-') throw new Error('文件头不是有效的 PDF');
+  const storage = await estimateStorage().catch(() => null);
+  if (storage?.quota && storage.quota - storage.usage < file.size * 1.25) throw new Error('浏览器剩余空间不足，无法安全导入此 PDF');
+  navigator.storage?.persist?.().catch(() => {});
+  const previous = preserveAnnotations ? await getStoredPdf(paperId, attachmentId).catch(() => null) : null;
   const pdfjs = await loadPdfModule();
   const bytes = new Uint8Array(await file.arrayBuffer());
   const loadingTask = pdfjs.getDocument(pdfDocumentOptions(bytes));
   configurePdfPassword(loadingTask);
-  const pdf = await loadingTask.promise;
-  const metadata = await pdf.getMetadata().catch(() => ({ info: {} }));
-  const pages = []; const extractionErrors = {};
-  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-    setPdfProgress(pageNumber / pdf.numPages * 100, `正在提取第 ${pageNumber}/${pdf.numPages} 页`);
-    if (paperId === state.selectedPaperId) el('detail-pdf-status').textContent = `正在提取第 ${pageNumber}/${pdf.numPages} 页`;
-    const page = await pdf.getPage(pageNumber);
-    try { pages.push((await extractPdfPageText(page)).text); }
-    catch (error) { pages.push(''); extractionErrors[pageNumber] = error.message || '文本层解析失败'; }
-    finally { page.cleanup(); }
+  try {
+    const pdf = await loadingTask.promise;
+    const metadata = await pdf.getMetadata().catch(() => ({ info: {} }));
+    const pages = []; const extractionErrors = {};
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      if (state.pdfImportCancelId === jobId) throw new DOMException('导入已取消', 'AbortError');
+      updatePdfImportProgress(jobId, pageNumber / pdf.numPages * 92, `正在提取第 ${pageNumber}/${pdf.numPages} 页`);
+      if (paperId === state.selectedPaperId) el('detail-pdf-status').textContent = `正在提取第 ${pageNumber}/${pdf.numPages} 页`;
+      const page = await pdf.getPage(pageNumber);
+      try { pages.push((await extractPdfPageText(page)).text); }
+      catch (error) { pages.push(''); extractionErrors[pageNumber] = error.message || '文本层解析失败'; }
+      finally { page.cleanup(); }
+    }
+    updatePdfImportProgress(jobId, 95, '正在安全保存 PDF');
+    const result = {
+      schemaVersion: 3,
+      attachmentId: attachmentId || previous?.attachmentId || `attachment:${crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)}`,
+      paperId,
+      primary: true,
+      fileName: file.name,
+      size: file.size,
+      type: 'application/pdf',
+      pageCount: pdf.numPages,
+      pages,
+      annotations: previous?.annotations || [],
+      ocrPages: {},
+      extractionErrors,
+      metadata: { title: metadata.info?.Title || '', author: metadata.info?.Author || '', subject: metadata.info?.Subject || '' },
+      importedAt: new Date().toISOString(),
+      fingerprint: fingerprint || await pdfFileFingerprint(file),
+      blob: file.slice(0, file.size, 'application/pdf')
+    };
+    await putStoredPdf(result);
+    updatePdfImportProgress(jobId, 100, '导入完成');
+    return result;
+  } finally {
+    await loadingTask.destroy().catch(() => {});
+    if (state.pdfImportCancelId === jobId) state.pdfImportCancelId = null;
   }
-  const result = {
-    schemaVersion: 2,
-    paperId,
-    fileName: file.name,
-    size: file.size,
-    type: 'application/pdf',
-    pageCount: pdf.numPages,
-    pages,
-    annotations: [],
-    ocrPages: {},
-    extractionErrors,
-    metadata: { title: metadata.info?.Title || '', author: metadata.info?.Author || '', subject: metadata.info?.Subject || '' },
-    importedAt: new Date().toISOString(),
-    blob: file.slice(0, file.size, 'application/pdf')
-  };
-  await loadingTask.destroy();
-  await putStoredPdf(result);
-  navigator.storage?.persist?.().catch(() => {});
-  return result;
 }
 function pdfAttachmentMeta(stored, previous = {}) {
   storedPdfDefaults(stored);
@@ -740,58 +904,211 @@ function pdfAttachmentMeta(stored, previous = {}) {
     ocrPages: Object.keys(stored.ocrPages).length,
     annotationCount: stored.annotations.length,
     extractionErrors: Object.keys(stored.extractionErrors).length,
-    lastPage: Number(previous.lastPage || 1)
+    lastPage: Number(previous.lastPage || 1),
+    attachmentId: stored.attachmentId || previous.attachmentId || null,
+    fingerprint: stored.fingerprint || previous.fingerprint || null
   };
 }
 function renderPdfAttachmentStatus(record) {
   const meta = record?.pdfAttachment;
-  el('detail-pdf-status').textContent = meta ? `${meta.fileName} · ${meta.pageCount} 页 · ${meta.textPages} 页有文本 · ${meta.annotationCount || 0} 条标注${meta.ocrPages ? ` · OCR ${meta.ocrPages} 页` : ''}` : '尚未导入 PDF';
+  const attachmentCount = record?.pdfAttachments?.length || (meta ? 1 : 0);
+  el('detail-pdf-status').textContent = meta?.missing ? `${meta.fileName} · 本机文件缺失，请重新导入或运行附件修复` : meta ? `${meta.fileName} · ${meta.pageCount} 页 · ${meta.textPages} 页有文本 · ${meta.annotationCount || 0} 条标注${meta.ocrPages ? ` · OCR ${meta.ocrPages} 页` : ''}${attachmentCount > 1 ? ` · 共 ${attachmentCount} 个版本` : ''}` : '尚未导入 PDF';
   el('detail-pdf-import').textContent = meta ? '替换 PDF' : '导入 PDF';
-  for (const id of ['detail-pdf-open', 'detail-pdf-download', 'detail-pdf-remove']) el(id).classList.toggle('hidden', !meta);
+  for (const id of ['detail-pdf-open', 'detail-pdf-download']) el(id).classList.toggle('hidden', !meta || meta.missing);
+  el('detail-pdf-remove').classList.toggle('hidden', !meta);
 }
 async function attachPdfToPaper(file, paperId) {
   const paper = getPaper(paperId); if (!paper) return;
+  const existingRecord = getRecord(paperId);
+  if (existingRecord?.pdfAttachment && !confirm('这篇论文已经有 PDF。替换后将保留现有标注，但 OCR 文本会重新生成。是否继续？')) return;
   const button = el('detail-pdf-import'); button.disabled = true; button.textContent = '正在解析…';
   try {
-    const stored = await parseAndStorePdf(file, paperId);
+    const stored = await parseAndStorePdf(file, paperId, { attachmentId: existingRecord?.pdfAttachment?.attachmentId || null, preserveAnnotations: true });
     const record = ensureRecord(paper);
     record.pdfAttachment = pdfAttachmentMeta(stored, record.pdfAttachment || {});
+    record.pdfAttachments = [record.pdfAttachment];
     record.savedAt ||= new Date().toISOString();
-    saveLibrary(); renderPdfAttachmentStatus(record);
+    if (!saveLibrary()) throw new Error('PDF 已保存，但文献索引保存失败；请运行附件修复');
+    renderPdfAttachmentStatus(record);
     toast(`PDF 已导入：${stored.pageCount} 页，${record.pdfAttachment.textPages} 页可翻译`);
     await openPdfReader(paperId);
   } catch (error) { toast(error.message || 'PDF 导入失败'); }
   finally { button.disabled = false; renderPdfAttachmentStatus(getRecord(paperId)); }
 }
-async function importStandalonePdf(file) {
+function localPdfArea(metadata) {
+  const text = `${metadata.title} ${metadata.excerpt}`.toLowerCase();
+  return /architecture|processor|microarchitecture|accelerator|cache|memory system|interconnect|chiplet|risc-v|hardware/.test(text) ? 'architecture' : 'ai';
+}
+async function importStandalonePdf(file, { jobId = null, open = true, fingerprint = null } = {}) {
   const id = `local:${crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)}`;
   try {
-    toast('正在解析本地 PDF…');
-    const stored = await parseAndStorePdf(file, id);
-    const rawTitle = stored.metadata.title.trim(); const firstLine = stored.pages.find(Boolean)?.split(/\r?\n/).map(value => value.trim()).find(value => value.length >= 8 && value.length <= 220);
-    const title = rawTitle && !/^(untitled|document|unknown)$/i.test(rawTitle) ? rawTitle : firstLine || file.name.replace(/\.pdf$/i, '');
-    const rawAuthor = stored.metadata.author.trim();
-    const authors = /^(anonymous|unknown)$/i.test(rawAuthor) ? [] : rawAuthor.split(/\s*(?:;|,| and )\s*/i).map(value => value.trim()).filter(Boolean);
-    const excerpt = stored.pages.find(Boolean)?.replace(/\s+/g, ' ').slice(0, 1500) || '';
-    const doi = excerpt.match(/\b10\.\d{4,9}\/[-._;()/:A-Z0-9]+\b/i)?.[0]?.replace(/[.,;]+$/, '') || null;
+    if (!jobId) toast('正在解析本地 PDF…');
+    const stored = await parseAndStorePdf(file, id, { preserveAnnotations: false, jobId, fingerprint });
+    const metadata = derivePdfMetadata(stored, file);
+    const candidates = [...allPapers(), ...Object.values(library.records).map(record => getPaper(record?.paper?.id)).filter(Boolean)];
+    const match = findPdfPaperMatch(metadata, candidates);
+    if (match?.confidence >= .96 && !getRecord(match.paper.id)?.pdfAttachment) {
+      const moved = await movePdfAttachment(id, match.paper.id, stored.attachmentId);
+      const record = ensureRecord(match.paper);
+      record.savedAt ||= new Date().toISOString();
+      record.lastOpenedAt = new Date().toISOString();
+      record.pdfAttachment = pdfAttachmentMeta(moved);
+      record.pdfAttachments = [record.pdfAttachment];
+      if (!saveLibrary()) throw new Error('匹配成功，但文献索引保存失败');
+      return { paperId: match.paper.id, matched: true, reason: match.reason, stored: moved };
+    }
     const paper = {
-      id, title, abstract: excerpt, authors, published: file.lastModified ? new Date(file.lastModified).toISOString() : new Date().toISOString(),
-      venue: '本地 PDF', venueName: '本地 PDF', source: '本地导入', kind: 'local', area: 'ai', link: doi ? `https://doi.org/${doi}` : '', doi, citationCount: 0, qualityScore: 0
+      id, title: metadata.title, abstract: metadata.excerpt, authors: metadata.authors, published: null,
+      venue: '本地 PDF', venueName: '本地 PDF', source: '本地导入', kind: 'local', area: localPdfArea(metadata),
+      link: metadata.doi ? `https://doi.org/${metadata.doi}` : metadata.arxivId ? `https://arxiv.org/abs/${metadata.arxivId}` : '',
+      doi: metadata.doi, arxivId: metadata.arxivId, citationCount: 0, qualityScore: 0,
+      fileModifiedAt: file.lastModified ? new Date(file.lastModified).toISOString() : null
     };
     const record = ensureRecord(paper);
     record.savedAt = new Date().toISOString();
     record.lastOpenedAt = record.savedAt;
     record.pdfAttachment = pdfAttachmentMeta(stored);
-    saveLibrary(); navigate('library/saved'); openPaperRoute(id);
-    toast('本地论文已加入文献库');
+    record.pdfAttachments = [record.pdfAttachment];
+    if (!saveLibrary()) throw new Error('PDF 已保存，但文献记录未能持久化');
+    if (open) { navigate('library/saved'); openPaperRoute(id); }
+    if (!jobId) toast('本地论文已加入文献库');
+    return { paperId: id, matched: false, stored };
   } catch (error) {
     await deleteStoredPdf(id).catch(() => {});
-    toast(error.message || '本地 PDF 导入失败');
+    if (!jobId) toast(error.message || '本地 PDF 导入失败');
+    throw error;
   }
+}
+function formatFileSize(size) {
+  const value = Number(size || 0);
+  return value >= 1024 ** 3 ? `${(value / 1024 ** 3).toFixed(1)} GB` : value >= 1024 ** 2 ? `${(value / 1024 ** 2).toFixed(1)} MB` : `${Math.max(1, Math.round(value / 1024))} KB`;
+}
+async function updatePdfImportStorage() {
+  const node = el('pdf-import-storage'); if (!node) return;
+  const storage = await estimateStorage().catch(() => null);
+  node.textContent = storage?.quota
+    ? `浏览器存储：已用 ${formatFileSize(storage.usage)} / ${formatFileSize(storage.quota)}${storage.persisted ? ' · 已申请持久保存' : ''}`
+    : '浏览器未提供存储配额信息';
+}
+function renderPdfImportQueue() {
+  const container = el('pdf-import-queue'); if (!container) return;
+  const labels = { queued: '等待中', processing: '处理中', success: '已完成', failed: '失败', cancelled: '已取消', skipped: '已跳过' };
+  container.innerHTML = state.pdfImportQueue.length ? state.pdfImportQueue.map(job => `
+    <article class="pdf-import-job ${escapeHtml(job.status)}" data-pdf-import-job="${escapeHtml(job.id)}">
+      <div class="pdf-import-job-main"><strong>${escapeHtml(job.fileName)}</strong><span>${formatFileSize(job.size)} · ${escapeHtml(labels[job.status] || job.status)}</span><small>${escapeHtml(job.message || '')}</small></div>
+      <div class="pdf-import-job-progress"><i style="width:${Math.max(0, Math.min(100, Number(job.progress || 0)))}%"></i></div>
+      <div class="pdf-import-job-actions">
+        ${job.status === 'processing' ? '<button class="small" data-import-action="cancel">取消</button>' : ''}
+        ${['failed', 'cancelled'].includes(job.status) ? '<button class="small" data-import-action="retry">重试</button>' : ''}
+        ${job.status !== 'processing' ? '<button class="small" data-import-action="remove">移除</button>' : ''}
+      </div>
+    </article>`).join('') : '<div class="empty">拖入 PDF、选择多个文件或扫描一个文件夹。</div>';
+  const active = state.pdfImportQueue.filter(job => ['queued', 'processing'].includes(job.status)).length;
+  el('pdf-import-summary').textContent = active ? `${active} 个任务待处理` : state.pdfImportQueue.length ? '队列已处理完毕' : '尚未添加文件';
+}
+function openPdfImportCenter() {
+  el('pdf-import-modal').classList.add('open');
+  renderPdfImportQueue();
+  updatePdfImportStorage();
+}
+async function queuePdfFiles(files, { targetPaperId = null } = {}) {
+  const pdfs = [...files].filter(file => /\.pdf$/i.test(file.name) || file.type === 'application/pdf');
+  if (!pdfs.length) return toast('没有找到 PDF 文件');
+  openPdfImportCenter();
+  for (const file of pdfs) {
+    const id = `import:${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`}`;
+    const job = {
+      id, file, blob: file, fileName: file.name, size: file.size, type: file.type || 'application/pdf',
+      lastModified: file.lastModified || 0, targetPaperId, status: 'queued', progress: 0, message: '等待解析'
+    };
+    state.pdfImportQueue.push(job);
+    await savePdfImportJob({ ...job, file: undefined }).catch(() => {});
+  }
+  renderPdfImportQueue();
+  processPdfImportQueue();
+}
+async function processPdfImportQueue() {
+  if (state.pdfImportActive) return;
+  state.pdfImportActive = true;
+  try {
+    while (true) {
+      const job = state.pdfImportQueue.find(item => item.status === 'queued');
+      if (!job) break;
+      job.status = 'processing'; job.progress = 1; job.message = '正在校验文件';
+      renderPdfImportQueue();
+      try {
+        const fingerprint = await pdfFileFingerprint(job.file);
+        const duplicate = (await listPdfDocuments()).find(document => document.fingerprint && document.fingerprint === fingerprint);
+        if (duplicate) {
+          job.status = 'skipped'; job.progress = 100; job.message = '相同 PDF 已在文献库中';
+        } else if (job.targetPaperId) {
+          const paper = getPaper(job.targetPaperId);
+          if (!paper) throw new Error('目标论文不存在');
+          const record = ensureRecord(paper);
+          const stored = await parseAndStorePdf(job.file, job.targetPaperId, {
+            attachmentId: record.pdfAttachment?.attachmentId || null,
+            preserveAnnotations: true,
+            jobId: job.id,
+            fingerprint
+          });
+          record.pdfAttachment = pdfAttachmentMeta(stored, record.pdfAttachment || {});
+          record.pdfAttachments = [record.pdfAttachment, ...(record.pdfAttachments || []).filter(item => item.attachmentId !== record.pdfAttachment.attachmentId)];
+          record.savedAt ||= new Date().toISOString();
+          if (!saveLibrary()) throw new Error('文献索引保存失败');
+          job.status = 'success'; job.progress = 100; job.message = '已附加到论文';
+        } else {
+          const result = await importStandalonePdf(job.file, { jobId: job.id, open: false, fingerprint });
+          job.status = 'success'; job.progress = 100;
+          job.message = result.matched ? `已自动关联：${result.reason}` : '已创建本地论文';
+        }
+        await deletePdfImportJob(job.id).catch(() => {});
+      } catch (error) {
+        job.status = error?.name === 'AbortError' ? 'cancelled' : 'failed';
+        job.message = error?.message || '导入失败';
+        await savePdfImportJob({ ...job, file: undefined, blob: job.file }).catch(() => {});
+      }
+      renderPdfImportQueue();
+    }
+  } finally {
+    state.pdfImportActive = false;
+    renderPdfImportQueue();
+    if (parseRoute().name === 'library') renderRoute();
+  }
+}
+async function restorePdfImportQueue() {
+  const pending = await loadPendingPdfImportJobs().catch(() => []);
+  for (const saved of pending) {
+    if (!saved.blob) continue;
+    const file = new File([saved.blob], saved.fileName, { type: saved.type || 'application/pdf', lastModified: saved.lastModified || Date.now() });
+    state.pdfImportQueue.push({ ...saved, file, status: saved.status === 'processing' ? 'queued' : saved.status, progress: saved.status === 'processing' ? 0 : saved.progress || 0 });
+  }
+  if (state.pdfImportQueue.some(job => job.status === 'queued')) processPdfImportQueue();
+}
+async function choosePdfDirectory() {
+  if ('showDirectoryPicker' in window) {
+    try {
+      const directory = await window.showDirectoryPicker({ mode: 'read', id: 'paperscope-pdf-library' });
+      const files = [];
+      async function visit(handle) {
+        for await (const entry of handle.values()) {
+          if (entry.kind === 'directory') await visit(entry);
+          else if (/\.pdf$/i.test(entry.name)) files.push(await entry.getFile());
+        }
+      }
+      await visit(directory);
+      return queuePdfFiles(files);
+    } catch (error) {
+      if (error?.name !== 'AbortError') toast(`读取文件夹失败：${error.message}`);
+      return;
+    }
+  }
+  el('local-pdf-directory').click();
 }
 async function openPdfReader(paperId) {
   try {
-    const stored = storedPdfDefaults(await getStoredPdf(paperId));
+    const storedValue = await getStoredPdf(paperId, getRecord(paperId)?.pdfAttachment?.attachmentId || null);
+    if (!storedValue) throw new Error('本地 PDF 文件不存在，可能已被浏览器清理');
+    const stored = storedPdfDefaults(storedValue);
     if (!stored?.blob) throw new Error('本地 PDF 文件不存在，可能已被浏览器清理');
     if (state.pdfLoadingTask) await state.pdfLoadingTask.destroy().catch(() => {});
     const pdfjs = await loadPdfModule();
@@ -1031,9 +1348,10 @@ function renderPdfAnnotationList(selectedId = null) {
   el('pdf-inspector-count').textContent = String(annotations.length);
   el('pdf-annotation-list').innerHTML = annotations.length ? annotations.map((item, index) => `<article class="pdf-annotation-item ${selectedId === item.id ? 'selected' : ''}" style="border-left-color:${escapeHtml(item.color)}" data-pdf-annotation-id="${escapeHtml(item.id)}"><strong>${index + 1}. 第 ${item.page} 页 · ${annotationTypeLabel(item.type)}</strong>${item.text ? `<p>${escapeHtml(item.text.slice(0, 220))}</p>` : ''}${item.comment ? `<p>批注：${escapeHtml(item.comment)}</p>` : ''}<div class="pdf-annotation-actions"><button data-pdf-annotation-action="goto">定位</button><button data-pdf-annotation-action="comment">编辑批注</button><button data-pdf-annotation-action="delete">删除</button></div></article>`).join('') : '<div class="mono">暂无 PDF 标注。选择页面文字或使用区域工具开始标注。</div>';
 }
-async function persistPdfRecord() {
+async function persistPdfRecord(kind = 'annotations') {
   if (!state.pdfRecord) return;
-  await putStoredPdf(state.pdfRecord);
+  if (kind === 'text') await putPdfTextState(state.pdfRecord);
+  else await putPdfAnnotations(state.pdfPaperId, state.pdfRecord.attachmentId, state.pdfRecord.annotations);
   const record = getRecord(state.pdfPaperId);
   if (record) {
     record.pdfAttachment = pdfAttachmentMeta(state.pdfRecord, record.pdfAttachment || {}); saveLibrary();
@@ -1622,7 +1940,7 @@ async function reparsePdfText() {
       } catch (error) { errors[pageNumber] = error.message || '文本层解析失败'; }
       finally { page.cleanup(); }
     }
-    state.pdfRecord.extractionErrors = errors; await persistPdfRecord(); await renderPdfPage();
+    state.pdfRecord.extractionErrors = errors; await persistPdfRecord('text'); await renderPdfPage();
     toast(`重新解析完成：${state.pdfRecord.pages.filter(Boolean).length}/${state.pdfRecord.pageCount} 页有文本`);
   } finally { button.disabled = false; }
 }
@@ -1655,7 +1973,7 @@ async function ocrPdfPage(pageNumber, rerender = true) {
   state.pdfRecord.pages[pageNumber - 1] = text;
   state.pdfRecord.ocrPages[pageNumber] = { language: 'eng+chi_sim', confidence: Number(result.data?.confidence || 0), updatedAt: new Date().toISOString() };
   delete state.pdfRecord.extractionErrors[pageNumber];
-  await persistPdfRecord(); if (rerender && state.pdfPage === pageNumber) await renderPdfPage();
+  await persistPdfRecord('text'); if (rerender && state.pdfPage === pageNumber) await renderPdfPage();
   return true;
 }
 async function ocrCurrentPdfPage() {
@@ -1757,7 +2075,23 @@ async function importPdfAnnotationsFile(file) {
     if (payload.schema !== 'paperscope-pdf-annotations-v1' || !Array.isArray(payload.annotations)) throw new Error('不是有效的 PaperScope PDF 标注文件');
     if (Number(payload.pageCount) !== Number(state.pdfRecord.pageCount) && !confirm('标注文件页数与当前 PDF 不一致，仍要导入吗？')) return;
     const existing = new Set(currentPdfAnnotations().map(item => item.id));
-    state.pdfRecord.annotations.push(...payload.annotations.filter(item => item?.id && item?.page && Array.isArray(item.rects) && !existing.has(item.id)));
+    const imported = payload.annotations.filter(item => item?.id && !existing.has(String(item.id)) && Number(item.page) >= 1 && Number(item.page) <= state.pdfRecord.pageCount && ['highlight', 'underline', 'note', 'area'].includes(item.type) && Array.isArray(item.rects)).map(item => ({
+      id: String(item.id).slice(0, 120),
+      type: item.type,
+      page: Number(item.page),
+      rects: item.rects.filter(rect => [rect?.x, rect?.y, rect?.width, rect?.height].every(Number.isFinite)).map(rect => ({
+        x: Math.max(0, Math.min(1, rect.x)),
+        y: Math.max(0, Math.min(1, rect.y)),
+        width: Math.max(0, Math.min(1, rect.width)),
+        height: Math.max(0, Math.min(1, rect.height))
+      })).filter(rect => rect.width > 0 && rect.height > 0),
+      text: String(item.text || '').slice(0, 2000),
+      comment: String(item.comment || '').slice(0, 2000),
+      color: /^#[0-9a-f]{6}$/i.test(item.color) ? item.color : '#f4d35e',
+      createdAt: item.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    })).filter(item => item.rects.length);
+    state.pdfRecord.annotations.push(...imported);
     await persistPdfRecord(); renderAllPdfAnnotationLayers(); renderPdfAnnotationList(); toast('PDF 标注已导入');
   } catch (error) { toast(error.message || '标注导入失败'); }
 }
@@ -1781,12 +2115,16 @@ function searchPdfText() {
 }
 async function removeAttachedPdf(paperId) {
   if (!confirm('移除本机保存的 PDF？收藏、笔记和论文元数据会保留。')) return;
-  await deleteStoredPdf(paperId);
-  const record = getRecord(paperId); if (record) record.pdfAttachment = null;
+  const record = getRecord(paperId);
+  await deleteStoredPdf(paperId, record?.pdfAttachment?.attachmentId || null);
+  if (record) {
+    record.pdfAttachments = (record.pdfAttachments || []).filter(item => item.attachmentId !== record.pdfAttachment?.attachmentId);
+    record.pdfAttachment = record.pdfAttachments[0] || null;
+  }
   saveLibrary(); renderPdfAttachmentStatus(record); toast('本地 PDF 已移除');
 }
 async function downloadAttachedPdf(paperId) {
-  const stored = await getStoredPdf(paperId); if (!stored?.blob) return toast('本地 PDF 文件不存在');
+  const stored = await getStoredPdf(paperId, getRecord(paperId)?.pdfAttachment?.attachmentId || null); if (!stored?.blob) return toast('本地 PDF 文件不存在');
   const url = URL.createObjectURL(stored.blob); const link = document.createElement('a'); link.href = url; link.download = stored.fileName; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
@@ -1977,6 +2315,11 @@ function openCommand(query = '') { el('command-modal').classList.add('open'); el
 function closeModal(id) {
   el(id).classList.remove('open');
   if (id === 'pdf-modal') closePdfReader();
+  if (id === 'appearance-modal' && appearanceSnapshot) {
+    uiSettings = appearanceSnapshot;
+    appearanceSnapshot = null;
+    applyUiSettings({ save: false });
+  }
 }
 
 function toggleVenueSave(name) { const saved = new Set(library.savedVenues || []); saved.has(name) ? saved.delete(name) : saved.add(name); library.savedVenues = [...saved]; saveLibrary(); renderCurrentView(); }
@@ -2614,7 +2957,7 @@ async function translatePaperAbstract() {
 document.addEventListener('click', event => {
   const selectedText = window.getSelection()?.toString().trim();
   if (selectedText && event.target.closest('[data-open-paper],[data-action="open"],a.news-card')) return;
-  const routeButton = event.target.closest('[data-route]'); if (routeButton) return navigate(routeButton.dataset.route);
+  const routeButton = event.target.closest('[data-route]'); if (routeButton) { el('mobile-more-menu').classList.remove('open'); el('mobile-more').setAttribute('aria-expanded', 'false'); return navigate(routeButton.dataset.route); }
   const open = event.target.closest('[data-open-paper]'); if (open) return openPaperRoute(open.dataset.openPaper);
   const compare = event.target.closest('[data-compare]'); if (compare) return toggleCompare(compare.dataset.compare);
   const venueSave = event.target.closest('[data-venue-save]'); if (venueSave) return toggleVenueSave(venueSave.dataset.venueSave);
@@ -2671,6 +3014,7 @@ el('refresh-data').addEventListener('click', () => loadData(true));
 ['curated-area', 'curated-venue'].forEach(id => el(id).addEventListener('change', () => navigate('curated', { ...parseRoute().query, area: el('curated-area').value, venue: el('curated-venue').value })));
 
 el('library-tabs').addEventListener('click', event => { const button = event.target.closest('[data-tab]'); if (button) navigate(`library/${button.dataset.tab}`); });
+el('library-tab-select').addEventListener('change', event => navigate(`library/${event.target.value}`));
 el('library-list').addEventListener('click', event => {
   const vocabularyRow = event.target.closest('[data-vocabulary-id]');
   if (vocabularyRow) {
@@ -2707,7 +3051,7 @@ el('library-list').addEventListener('click', event => {
 });
 el('library-list').addEventListener('change', event => { if (!event.target.matches('[data-library-select]')) return; const id = event.target.closest('[data-library-id]').dataset.libraryId; event.target.checked ? state.batch.add(id) : state.batch.delete(id); updateBatchCount(); });
 el('library-select-all').addEventListener('change', event => { document.querySelectorAll('[data-library-select]').forEach(input => { input.checked = event.target.checked; const id = input.closest('[data-library-id]').dataset.libraryId; event.target.checked ? state.batch.add(id) : state.batch.delete(id); }); updateBatchCount(); });
-el('batch-read').addEventListener('click', () => { for (const id of state.batch) { const record = ensureRecord(getPaper(id)); record.readAt ||= new Date().toISOString(); record.progress = 100; } saveLibrary(); renderRoute(); toast('已批量标记为已读'); });
+el('batch-read').addEventListener('click', () => { for (const id of state.batch) setRecordRead(ensureRecord(getPaper(id)), true); saveLibrary(); renderRoute(); toast('已批量标记为已读'); });
 el('batch-queue').addEventListener('click', () => { for (const id of state.batch) ensureRecord(getPaper(id)).queueAt ||= new Date().toISOString(); saveLibrary(); renderRoute(); toast('已加入阅读队列'); });
 el('batch-citations').addEventListener('click', () => { if (!state.batch.size) return toast('请先选择论文'); downloadText('paperscope-citations.bib', [...state.batch].map(id => bibtexFor(getPaper(id))).join('\n\n')); });
 el('merge-duplicates').addEventListener('click', mergeSelectedDuplicates);
@@ -2719,9 +3063,26 @@ el('delete-collection').addEventListener('click', () => { const id = el('collect
 el('smart-filter').addEventListener('change', event => navigate('library/smart', { smart: event.target.value, page: 1 }));
 el('library-pdf-search-button').addEventListener('click', searchLocalPdfLibrary);
 el('library-pdf-search').addEventListener('keydown', event => { if (event.key === 'Enter') searchLocalPdfLibrary(); });
-el('export-vocabulary').addEventListener('click', exportVocabulary); el('export-library').addEventListener('click', exportLibrary); el('import-library').addEventListener('click', () => el('import-file').click()); el('import-file').addEventListener('change', event => { const [file] = event.target.files; if (file) importLibraryFile(file); event.target.value = ''; });
-el('import-local-pdf').addEventListener('click', () => el('local-pdf-file').click());
-el('local-pdf-file').addEventListener('change', async event => { const [file] = event.target.files; if (file) await importStandalonePdf(file); event.target.value = ''; });
+el('export-vocabulary').addEventListener('click', exportVocabulary); el('export-library').addEventListener('click', exportLibrary); el('export-full-backup').addEventListener('click', exportCompleteBackup); el('repair-pdf-library').addEventListener('click', () => repairPdfLibrary()); el('import-library').addEventListener('click', () => el('import-file').click()); el('import-file').addEventListener('change', event => { const [file] = event.target.files; if (file) importLibraryFile(file); event.target.value = ''; });
+el('import-local-pdf').addEventListener('click', openPdfImportCenter);
+el('import-pdf-directory').addEventListener('click', choosePdfDirectory);
+el('pdf-import-choose').addEventListener('click', () => el('local-pdf-file').click());
+el('pdf-import-folder').addEventListener('click', choosePdfDirectory);
+el('local-pdf-file').addEventListener('change', async event => { if (event.target.files.length) await queuePdfFiles(event.target.files); event.target.value = ''; });
+el('local-pdf-directory').addEventListener('change', async event => { if (event.target.files.length) await queuePdfFiles(event.target.files); event.target.value = ''; });
+el('pdf-import-dropzone').addEventListener('dragover', event => { event.preventDefault(); event.currentTarget.classList.add('dragover'); });
+el('pdf-import-dropzone').addEventListener('dragleave', event => event.currentTarget.classList.remove('dragover'));
+el('pdf-import-dropzone').addEventListener('drop', async event => { event.preventDefault(); event.currentTarget.classList.remove('dragover'); await queuePdfFiles(event.dataTransfer.files); });
+el('pdf-import-dropzone').addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); el('local-pdf-file').click(); } });
+el('pdf-import-queue').addEventListener('click', async event => {
+  const row = event.target.closest('[data-pdf-import-job]'); const action = event.target.closest('[data-import-action]')?.dataset.importAction;
+  if (!row || !action) return;
+  const job = state.pdfImportQueue.find(item => item.id === row.dataset.pdfImportJob); if (!job) return;
+  if (action === 'cancel') state.pdfImportCancelId = job.id;
+  else if (action === 'retry') { job.status = 'queued'; job.progress = 0; job.message = '等待重试'; await savePdfImportJob({ ...job, file: undefined, blob: job.file }).catch(() => {}); processPdfImportQueue(); }
+  else if (action === 'remove') { state.pdfImportQueue = state.pdfImportQueue.filter(item => item.id !== job.id); await deletePdfImportJob(job.id).catch(() => {}); }
+  renderPdfImportQueue();
+});
 
 ['news-source', 'news-page-size'].forEach(id => el(id).addEventListener('change', () => { const route = parseRoute(); navigate('news', { ...route.query, source: el('news-source').value, size: el('news-page-size').value, page: 1 }); }));
 ['venue-area', 'venue-type', 'venue-status', 'venue-sort'].forEach(id => el(id).addEventListener('change', () => { const route = parseRoute(); navigate('venues', { ...route.query, area: el('venue-area').value, type: el('venue-type').value, status: el('venue-status').value, sort: el('venue-sort').value, page: 1 }); }));
@@ -2733,7 +3094,7 @@ el('copy-bibtex').addEventListener('click', () => copyText(bibtexFor(getPaper(st
 el('detail-edit-metadata').addEventListener('click', openMetadataEditor); el('save-metadata').addEventListener('click', saveMetadataEditor);
 el('detail-bilingual').addEventListener('click', translatePaperAbstract);
 el('detail-pdf-import').addEventListener('click', () => el('detail-pdf-file').click());
-el('detail-pdf-file').addEventListener('change', async event => { const [file] = event.target.files; if (file) await attachPdfToPaper(file, state.selectedPaperId); event.target.value = ''; });
+el('detail-pdf-file').addEventListener('change', async event => { const [file] = event.target.files; if (file) await queuePdfFiles([file], { targetPaperId: state.selectedPaperId }); event.target.value = ''; });
 el('detail-pdf-open').addEventListener('click', () => openPdfReader(state.selectedPaperId));
 el('detail-pdf-download').addEventListener('click', () => downloadAttachedPdf(state.selectedPaperId));
 el('detail-pdf-remove').addEventListener('click', () => removeAttachedPdf(state.selectedPaperId));
@@ -2867,7 +3228,7 @@ el('pdf-annotation-list').addEventListener('click', async event => {
   else if (action === 'comment') { const comment = prompt('编辑批注：', annotation.comment || ''); if (comment !== null) { annotation.comment = comment.trim(); annotation.updatedAt = new Date().toISOString(); await persistPdfRecord(); renderPdfAnnotationList(id); } }
   else if (action === 'delete' && confirm('删除这条 PDF 标注？')) { state.pdfRecord.annotations = currentPdfAnnotations().filter(value => value.id !== id); await persistPdfRecord(); renderPdfAnnotationLayerForPage(annotation.page); renderPdfAnnotationList(); }
 });
-el('save-note').addEventListener('click', () => { const record = ensureRecord(getPaper(state.selectedPaperId)); record.note = el('paper-note').value.trim(); record.tags = [...new Set(el('paper-tags').value.split(/[,，]/).map(value => value.trim()).filter(Boolean))].slice(0, 12); record.progress = Number(el('reading-progress').value); if (record.progress === 100) record.readAt ||= new Date().toISOString(); saveLibrary(); toast('阅读记录已保存'); });
+el('save-note').addEventListener('click', () => { const record = ensureRecord(getPaper(state.selectedPaperId)); record.note = el('paper-note').value.trim(); record.tags = [...new Set(el('paper-tags').value.split(/[,，]/).map(value => value.trim()).filter(Boolean))].slice(0, 12); record.progress = Number(el('reading-progress').value); if (record.progress === 100) record.readAt ||= new Date().toISOString(); else record.readAt = null; saveLibrary(); toast('阅读记录已保存'); });
 el('add-to-collection').addEventListener('click', () => { const collectionId = el('paper-collection').value; if (!collectionId) return toast('请先选择专题'); const record = ensureRecord(getPaper(state.selectedPaperId)); if (!record.collections.includes(collectionId)) record.collections.push(collectionId); saveLibrary(); toast('已加入专题收藏'); });
 el('add-highlight').addEventListener('click', () => { const selection = window.getSelection(); const text = selection?.toString().replace(/\s+/g, ' ').trim(); const anchor = selection?.anchorNode; if (!text || text.length < 3) return toast('请先选中摘要文字'); if (text.length > 500) return toast('单条标注最多 500 字符'); if (!anchor || !el('detail-abstract').contains(anchor.nodeType === Node.TEXT_NODE ? anchor.parentNode : anchor)) return toast('只能标注摘要文字'); const record = ensureRecord(getPaper(state.selectedPaperId)); if (record.highlights.some(item => item.text === text)) return toast('这段文字已经标注'); record.highlights.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), text, color: el('highlight-color').value, createdAt: new Date().toISOString() }); saveLibrary(); selection.removeAllRanges(); renderHighlights(); toast('标注已保存'); });
 el('highlight-list').addEventListener('click', event => { const button = event.target.closest('[data-highlight-remove]'); if (!button) return; const record = getRecord(state.selectedPaperId); record.highlights = record.highlights.filter(item => item.id !== button.dataset.highlightRemove); saveLibrary(); renderHighlights(); });
@@ -2876,6 +3237,13 @@ el('previous-paper').addEventListener('click', () => moveDetail(-1)); el('next-p
 el('open-compare').addEventListener('click', renderCompare); el('clear-compare').addEventListener('click', () => { state.compare.clear(); updateCompareTray(); renderCurrentView(); }); el('compare-table').addEventListener('click', event => { const button = event.target.closest('[data-compare-remove]'); if (button) { state.compare.delete(button.dataset.compareRemove); updateCompareTray(); renderCompare(); } });
 el('command-open').addEventListener('click', () => openCommand()); el('command-input').addEventListener('input', event => renderCommands(event.target.value)); el('command-list').addEventListener('click', event => { const route = event.target.closest('[data-command-route]')?.dataset.commandRoute; const paper = event.target.closest('[data-command-paper]')?.dataset.commandPaper; closeModal('command-modal'); if (route) navigate(route); else if (paper) openPaperRoute(paper); });
 el('translation-open').addEventListener('click', openTranslationSettings);
+el('mobile-more').addEventListener('click', () => {
+  const open = !el('mobile-more-menu').classList.contains('open');
+  el('mobile-more-menu').classList.toggle('open', open);
+  el('mobile-more').setAttribute('aria-expanded', String(open));
+});
+el('mobile-import-pdf').addEventListener('click', () => { el('mobile-more-menu').classList.remove('open'); openPdfImportCenter(); });
+el('mobile-appearance').addEventListener('click', () => { el('mobile-more-menu').classList.remove('open'); openAppearanceSettings(); });
 el('translation-enabled').addEventListener('change', event => { translationSettings.enabled = event.target.checked; saveTranslationSettings(); if (translationSettings.enabled) detectTranslationCapability(); });
 el('translation-mode').addEventListener('change', event => { translationSettings.mode = event.target.value; saveTranslationSettings(); });
 el('translation-word-click').addEventListener('change', event => { translationSettings.wordClick = event.target.checked; saveTranslationSettings(); });
@@ -2954,8 +3322,63 @@ document.addEventListener('keydown', event => {
 });
 
 el('edit-profile').addEventListener('click', () => el('profile-modal').classList.add('open')); el('save-profile').addEventListener('click', () => { library.profile.name = el('profile-name').value.trim() || '研究者'; library.profile.focus = el('profile-focus').value.trim(); library.profile.bio = el('profile-bio').value.trim(); saveLibrary(); renderProfile(); closeModal('profile-modal'); toast('个人资料已保存'); });
-function applyTheme(theme) { document.documentElement.dataset.theme = theme; localStorage.setItem(THEME_KEY, theme); el('theme-toggle').textContent = theme === 'dark' ? '☀' : '◐'; }
+function resolvedUiTheme(theme = uiSettings.theme) {
+  return theme === 'system' ? (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light') : theme === 'dark' ? 'dark' : 'light';
+}
+function applyUiSettings({ save = true } = {}) {
+  const root = document.documentElement;
+  root.dataset.theme = resolvedUiTheme();
+  root.dataset.uiPreset = ['classic', 'compact', 'focus', 'accessible'].includes(uiSettings.preset) ? uiSettings.preset : 'classic';
+  root.dataset.density = ['comfortable', 'standard', 'compact'].includes(uiSettings.density) ? uiSettings.density : 'standard';
+  root.dataset.sidebar = uiSettings.sidebar === 'collapsed' ? 'collapsed' : 'expanded';
+  root.classList.toggle('reduce-motion', Boolean(uiSettings.reduceMotion));
+  root.style.setProperty('--user-font-scale', String(Math.max(.9, Math.min(1.3, Number(uiSettings.fontScale || 1)))));
+  el('theme-toggle').textContent = root.dataset.theme === 'dark' ? '☀' : '◐';
+  if (save) {
+    localStorage.setItem(UI_SETTINGS_KEY, JSON.stringify(uiSettings));
+    localStorage.setItem(THEME_KEY, uiSettings.theme);
+  }
+}
+function syncAppearanceControls() {
+  el('appearance-theme').value = uiSettings.theme;
+  el('appearance-density').value = uiSettings.density;
+  el('appearance-font').value = String(uiSettings.fontScale);
+  el('appearance-sidebar').value = uiSettings.sidebar;
+  el('appearance-motion').checked = Boolean(uiSettings.reduceMotion);
+  document.querySelectorAll('[data-ui-preset]').forEach(button => button.classList.toggle('active', button.dataset.uiPreset === uiSettings.preset));
+}
+function openAppearanceSettings() {
+  appearanceSnapshot = { ...uiSettings };
+  syncAppearanceControls();
+  el('appearance-modal').classList.add('open');
+}
+function updateAppearancePreview() {
+  uiSettings = {
+    ...uiSettings,
+    theme: el('appearance-theme').value,
+    density: el('appearance-density').value,
+    fontScale: Number(el('appearance-font').value),
+    sidebar: el('appearance-sidebar').value,
+    reduceMotion: el('appearance-motion').checked
+  };
+  applyUiSettings({ save: false });
+}
+function applyTheme(theme) {
+  uiSettings.theme = theme;
+  applyUiSettings();
+}
 el('theme-toggle').addEventListener('click', () => applyTheme(document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark'));
+el('appearance-open').addEventListener('click', openAppearanceSettings);
+document.querySelectorAll('[data-ui-preset]').forEach(button => button.addEventListener('click', () => {
+  uiSettings.preset = button.dataset.uiPreset;
+  syncAppearanceControls();
+  applyUiSettings({ save: false });
+}));
+['appearance-theme', 'appearance-density', 'appearance-font', 'appearance-sidebar'].forEach(id => el(id).addEventListener('change', updateAppearancePreview));
+el('appearance-motion').addEventListener('change', updateAppearancePreview);
+el('appearance-save').addEventListener('click', () => { updateAppearancePreview(); applyUiSettings(); appearanceSnapshot = null; closeModal('appearance-modal'); toast('界面配置已保存'); });
+el('appearance-reset').addEventListener('click', () => { uiSettings = { ...UI_DEFAULTS, preset: 'classic' }; applyUiSettings(); appearanceSnapshot = { ...uiSettings }; syncAppearanceControls(); toast('已恢复经典绿设置'); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (uiSettings.theme === 'system') applyUiSettings({ save: false }); });
 window.addEventListener('scroll', () => el('backtop').classList.toggle('show', window.scrollY > 500)); el('backtop').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
 window.addEventListener('hashchange', renderRoute); window.addEventListener('resize', () => {
   if (translationSettings.positionMode !== 'pinned' || !translationSettings.position) return;
@@ -2964,4 +3387,15 @@ window.addEventListener('hashchange', renderRoute); window.addEventListener('res
 });
 window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); state.installPrompt = event; el('install-app').classList.add('show'); }); el('install-app').addEventListener('click', async () => { if (!state.installPrompt) return; state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; el('install-app').classList.remove('show'); }); window.addEventListener('appinstalled', () => toast('PaperScope 已安装'));
 
-applyTheme(localStorage.getItem(THEME_KEY) || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')); applyTranslationSettings(); setupTranslationDragging(); loadDomainDictionary().catch(() => {}); detectTranslationCapability(); renderProfile(); renderCollectionOptions('all'); if (!location.hash.startsWith('#/')) history.replaceState(null, '', '#/home'); registerAppServiceWorker(); loadData();
+applyUiSettings(); applyTranslationSettings(); setupTranslationDragging(); loadDomainDictionary().catch(() => {}); detectTranslationCapability(); renderProfile(); renderCollectionOptions('all'); if (!location.hash.startsWith('#/')) history.replaceState(null, '', '#/home'); registerAppServiceWorker(); loadData();
+openPdfDatabase().then(async () => {
+  await repairPdfLibrary({ notify: false });
+  await restorePdfImportQueue();
+}).catch(error => toast(error.message || 'PDF 数据库初始化失败'));
+if ('launchQueue' in window) {
+  window.launchQueue.setConsumer(async launchParams => {
+    const files = [];
+    for (const handle of launchParams.files || []) files.push(await handle.getFile());
+    if (files.length) queuePdfFiles(files);
+  });
+}

@@ -111,6 +111,72 @@
     @media(max-width:720px){.library-stats{grid-template-columns:repeat(3,1fr)}.translation-popover{bottom:75px!important;left:12px!important;top:auto!important;width:calc(100vw - 24px);max-height:68vh;resize:none}.translation-popover-body{max-height:calc(68vh - 49px)}.translation-popover-head{cursor:default}.setting-row{gap:12px}.setting-row{align-items:center}.translation-input{width:min(220px,52vw)}.update-banner{align-items:flex-start}.update-actions{display:grid}}
     @media(max-width:820px){#pdf-modal{padding:0;align-items:stretch}.pdf-dialog{width:100%;height:100%;max-height:none;border-radius:0;padding:9px}.pdf-toolbar,.pdf-annotation-toolbar{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:thin;padding:6px 0}.pdf-toolbar>* ,.pdf-annotation-toolbar>*{flex:0 0 auto}.pdf-toolbar-group{border:0;padding:0;background:transparent}.pdf-reader{grid-template-columns:1fr}.pdf-canvas-stage{min-height:58vh;padding:12px}.pdf-text-pane{position:absolute;z-index:6;left:9px;right:9px;bottom:9px;max-height:46vh;border:1px solid var(--line);border-radius:11px;box-shadow:0 -14px 40px #0004}.pdf-search{margin-left:0;width:280px}.pdf-search input{flex:1;width:auto}.pdf-toolbar-divider{display:none}.pdf-shortcuts{margin-left:0;min-width:260px}}
   </style>
+  <style>
+    :root{--user-font-scale:1}
+    body{font-size:calc(14px * var(--user-font-scale))}
+    button,input,textarea,select{font-size:inherit}
+    :focus-visible{outline:3px solid color-mix(in srgb,var(--green) 70%,#fff);outline-offset:2px}
+    .page-actions{display:flex;justify-content:flex-end;gap:7px;flex-wrap:wrap}
+    .mobile-more-button,.mobile-more-menu,.library-mobile-filter{display:none}
+    .pdf-import-dialog{width:min(820px,96vw)}
+    .pdf-import-dropzone{border:2px dashed color-mix(in srgb,var(--green) 38%,var(--line));border-radius:14px;background:var(--soft);padding:28px;text-align:center;display:grid;gap:8px}
+    .pdf-import-dropzone.dragover{background:var(--pale);border-color:var(--green)}
+    .pdf-import-dropzone span,.pdf-import-storage{font-size:11px;color:var(--muted)}
+    .pdf-import-dropzone>div{display:flex;justify-content:center;gap:8px;margin-top:8px}
+    .pdf-import-storage{padding:10px 2px}
+    .pdf-import-queue{display:grid;gap:8px;max-height:46vh;overflow:auto}
+    .pdf-import-job{display:grid;grid-template-columns:minmax(0,1fr) 180px auto;align-items:center;gap:12px;border:1px solid var(--line);border-radius:11px;padding:11px 12px}
+    .pdf-import-job.failed{border-color:color-mix(in srgb,var(--rose) 55%,var(--line))}
+    .pdf-import-job.success{border-color:color-mix(in srgb,var(--green) 45%,var(--line))}
+    .pdf-import-job-main{display:grid;min-width:0}.pdf-import-job-main strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pdf-import-job-main span,.pdf-import-job-main small{color:var(--muted);font-size:10px}
+    .pdf-import-job-progress{height:7px;border-radius:8px;background:var(--soft);overflow:hidden}.pdf-import-job-progress i{display:block;height:100%;background:var(--green);transition:width .18s}
+    .pdf-import-job-actions{display:flex;gap:5px}
+    .appearance-dialog{width:min(760px,96vw)}
+    .ui-preset-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+    .ui-preset-grid button{border:1px solid var(--line);border-radius:12px;background:var(--card);padding:16px;text-align:left;display:grid;gap:4px}
+    .ui-preset-grid button span{font-size:10px;color:var(--muted)}.ui-preset-grid button.active{border-color:var(--green);background:var(--pale)}
+    .appearance-controls{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:15px 0}.appearance-controls label{display:grid;gap:5px;font-size:11px;color:var(--muted)}.appearance-controls select{border:1px solid var(--line);border-radius:8px;background:var(--card);padding:9px}.appearance-controls .appearance-check{display:flex;align-items:center;color:var(--ink)}
+    .dialog-actions{display:flex;gap:8px;justify-content:flex-end}
+    html[data-ui-preset="compact"] .main{padding-left:24px;padding-right:24px}
+    html[data-ui-preset="compact"] .card,html[data-ui-preset="compact"] .paper-row{border-radius:8px;box-shadow:none}
+    html[data-ui-preset="compact"] .paper-row,html[data-ui-preset="compact"] .library-row{padding-top:9px;padding-bottom:9px}
+    html[data-ui-preset="compact"] .preview-paper{padding-top:8px;padding-bottom:8px}
+    html[data-ui-preset="compact"] .page-head{margin-top:17px;margin-bottom:12px}
+    html[data-ui-preset="focus"]{--bg:#f4f0e7;--card:#fffdf8;--soft:#eee8dc;--line:#d9d0c0;--pale:#e6eee7;--green:#245b45;--green2:#173f31}
+    html[data-theme="dark"][data-ui-preset="focus"]{--bg:#171714;--card:#22211d;--soft:#2d2a24;--line:#49443a;--pale:#263a30;--green:#78c29f}
+    html[data-ui-preset="focus"] .main{max-width:1180px}html[data-ui-preset="focus"] .card{box-shadow:0 8px 25px #3d2e170b}
+    html[data-ui-preset="focus"] .abstract,html[data-ui-preset="focus"] .pdf-page-text{font-size:1.08em;line-height:1.9}
+    html[data-ui-preset="accessible"]{--ink:#101713;--muted:#46524b;--line:#9da9a2;--bg:#f7faf8;--card:#fff;--soft:#e8eeea;--green:#075f42;--pale:#d7eee2;--amber:#7a4a00;--blue:#135d91;--rose:#8b2141}
+    html[data-theme="dark"][data-ui-preset="accessible"]{--ink:#fff;--muted:#d1dad4;--line:#78877e;--bg:#080d0a;--card:#111a15;--soft:#1d2a23;--green:#83e6b8;--pale:#193d2b}
+    html[data-ui-preset="accessible"] button,html[data-ui-preset="accessible"] select,html[data-ui-preset="accessible"] input{min-height:44px}
+    html[data-density="comfortable"] .paper-row,html[data-density="comfortable"] .library-row{padding-top:19px;padding-bottom:19px}
+    html[data-density="compact"] .paper-row,html[data-density="compact"] .library-row{padding-top:8px;padding-bottom:8px}
+    html.reduce-motion *,html.reduce-motion *:before,html.reduce-motion *:after{scroll-behavior:auto!important;animation:none!important;transition:none!important}
+    @media(min-width:721px){
+      html[data-sidebar="collapsed"] .app{grid-template-columns:72px minmax(0,1fr)}
+      html[data-sidebar="collapsed"] .sidebar{padding-left:9px;padding-right:9px}
+      html[data-sidebar="collapsed"] .brand{font-size:0;margin-left:12px}
+      html[data-sidebar="collapsed"] .caption,html[data-sidebar="collapsed"] .side-bottom,html[data-sidebar="collapsed"] .nav button span:last-child{display:none}
+      html[data-sidebar="collapsed"] .nav button{justify-content:center}
+    }
+    @media(max-width:720px){
+      .top-actions{width:100%}.topbar{gap:5px}.profile-chip{padding-right:4px}.search{min-width:0}
+      .page-head{align-items:flex-start;flex-direction:column;gap:12px}
+      .page-head .page-actions{display:flex;width:100%;justify-content:flex-start;flex-wrap:nowrap;overflow-x:auto;padding-bottom:4px}
+      .page-head .page-actions>*{flex:0 0 auto}
+      .nav{grid-template-columns:repeat(6,1fr)}
+      .nav [data-route="news"],.nav [data-route="venues"]{display:none}
+      .mobile-more-button{display:grid!important}
+      .mobile-more-menu{position:fixed;display:none;right:9px;bottom:70px;z-index:20;width:180px;padding:8px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 18px 45px #0003}
+      .mobile-more-menu.open{display:grid}.mobile-more-menu button{border:0;background:transparent;text-align:left;padding:11px;border-radius:8px}.mobile-more-menu button:hover{background:var(--soft)}
+      .library-mobile-filter{display:grid;grid-template-columns:auto 1fr;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--line);font-size:11px;color:var(--muted)}
+      .library-mobile-filter select{border:1px solid var(--line);border-radius:8px;background:var(--card);padding:9px}
+      #library-tabs{display:none}
+      .library-row{grid-template-columns:auto minmax(0,1fr);gap:9px}.library-row>.paper-actions{grid-column:2;display:flex;flex-wrap:wrap}.library-row h3{overflow-wrap:anywhere}
+      .pdf-import-job{grid-template-columns:1fr}.pdf-import-job-actions{justify-content:flex-end}.pdf-import-dropzone{padding:20px 12px}
+      .ui-preset-grid,.appearance-controls{grid-template-columns:1fr}
+    }
+  </style>
 </head>
 <body>
 <div class="app">
@@ -125,18 +191,21 @@
       <button data-route="library"><span class="nav-icon">★</span><span>文献库</span></button>
       <button data-route="news"><span class="nav-icon">◫</span><span>资讯</span></button>
       <button data-route="venues"><span class="nav-icon">◎</span><span>会议期刊</span></button>
+      <button class="mobile-more-button" id="mobile-more" aria-expanded="false"><span class="nav-icon">•••</span><span>更多</span></button>
     </nav>
     <div class="side-bottom"><button class="install" id="install-app">安装为 APP</button><div class="sync-box"><strong>每日自动更新</strong><span id="side-sync">等待数据</span></div></div>
   </aside>
+  <div class="mobile-more-menu" id="mobile-more-menu"><button data-route="news">研究资讯</button><button data-route="venues">会议期刊</button><button id="mobile-import-pdf">导入 PDF</button><button id="mobile-appearance">界面设置</button></div>
 
   <main class="main">
     <header class="topbar">
       <div class="route-name"><strong id="route-title">概览</strong> / PAPER INTELLIGENCE</div>
       <div class="top-actions">
         <label class="search">⌕ <input id="global-search" placeholder="搜索当前页面"></label>
-        <button class="icon-button" id="command-open" title="快速跳转 Ctrl/⌘ + K">⌘</button>
+        <button class="icon-button" id="command-open" title="快速跳转 Ctrl/⌘ + K" aria-label="快速跳转">⌘</button>
         <button class="icon-button" id="translation-open" title="翻译设置" aria-label="翻译设置" aria-pressed="true">译</button>
-        <button class="icon-button" id="theme-toggle" title="切换深色模式">◐</button>
+        <button class="icon-button" id="theme-toggle" title="切换深色模式" aria-label="切换明暗主题">◐</button>
+        <button class="icon-button" id="appearance-open" title="界面设置" aria-label="界面设置">UI</button>
         <button class="profile-chip" data-route="library"><span class="avatar" id="top-avatar">研</span><span class="top-name" id="top-name">研究者</span></button>
       </div>
     </header>
@@ -180,9 +249,10 @@
     </section>
 
     <section class="view" id="view-library">
-      <div class="page-head"><div><div class="eyebrow">PERSONAL RESEARCH LIBRARY</div><h1>我的文献库</h1><p class="subtitle">收藏、阅读队列、笔记、术语、翻译历史与本地 PDF 都保存在当前浏览器。</p></div><div class="page-actions"><button class="primary" id="import-local-pdf">＋ 本地 PDF</button><button class="ghost" id="export-vocabulary">导出生词</button><button class="ghost" id="export-library">导出备份</button><button class="ghost" id="import-library">导入</button><input class="hidden" type="file" id="import-file" accept="application/json"><input class="hidden" type="file" id="local-pdf-file" accept="application/pdf,.pdf"></div></div>
+      <div class="page-head"><div><div class="eyebrow">PERSONAL RESEARCH LIBRARY</div><h1>我的文献库</h1><p class="subtitle">收藏、阅读队列、笔记、术语、翻译历史与本地 PDF 都保存在当前浏览器。</p></div><div class="page-actions"><button class="primary" id="import-local-pdf">＋ 导入 PDF</button><button class="ghost" id="import-pdf-directory">扫描文件夹</button><button class="ghost" id="export-full-backup">完整备份</button><button class="ghost" id="repair-pdf-library">附件检查</button><button class="ghost" id="export-vocabulary">导出生词</button><button class="ghost" id="export-library">导出 JSON</button><button class="ghost" id="import-library">导入 JSON</button><input class="hidden" type="file" id="import-file" accept="application/json"><input class="hidden" type="file" id="local-pdf-file" accept="application/pdf,.pdf" multiple><input class="hidden" type="file" id="local-pdf-directory" accept="application/pdf,.pdf" multiple webkitdirectory></div></div>
       <section class="card">
         <div class="profile-panel"><div class="profile-info"><span class="avatar" id="profile-avatar">研</span><div><h2 id="profile-name-display">研究者</h2><p id="profile-focus-display">AI · 计算机体系结构</p></div><button class="small" id="edit-profile">编辑</button></div><div class="library-stats"><div class="library-stat"><span>收藏</span><b id="stat-saved">0</b></div><div class="library-stat"><span>队列</span><b id="stat-queue">0</b></div><div class="library-stat"><span>已读</span><b id="stat-read">0</b></div><div class="library-stat"><span>笔记</span><b id="stat-notes">0</b></div><div class="library-stat"><span>已发表</span><b id="stat-published">0</b></div><div class="library-stat"><span>生词</span><b id="stat-terms">0</b></div></div></div>
+        <label class="library-mobile-filter">文献分类<select id="library-tab-select"><option value="all">全部文献</option><option value="saved">收藏</option><option value="queue">阅读队列</option><option value="recent">最近看过</option><option value="notes">笔记与标注</option><option value="published">发表动态</option><option value="collections">专题收藏</option><option value="smart">智能检索</option><option value="unfiled">未归档</option><option value="duplicates">重复项</option><option value="vocabulary">生词本</option><option value="translations">翻译历史</option></select></label>
         <div class="tabs" id="library-tabs"><button data-tab="all">全部文献</button><button data-tab="saved">收藏</button><button data-tab="queue">阅读队列</button><button data-tab="recent">最近看过</button><button data-tab="notes">笔记与标注</button><button data-tab="published">发表动态</button><button data-tab="collections">专题收藏</button><button data-tab="smart">智能检索</button><button data-tab="unfiled">未归档</button><button data-tab="duplicates">重复项</button><button data-tab="vocabulary">生词本</button><button data-tab="translations">翻译历史</button></div>
         <div class="batchbar" id="library-batchbar"><div><label><input type="checkbox" id="library-select-all"> 全选本页</label> <span class="mono" id="batch-count">0 项已选</span></div><div><button class="small" id="batch-read">批量已读</button> <button class="small" id="batch-queue">加入队列</button> <button class="small" id="batch-citations">导出引用</button> <button class="small" id="merge-duplicates">合并重复项</button> <button class="small" id="check-publications">检查中刊状态</button></div></div>
         <div class="filterbar hidden" id="collection-tools"><select id="collection-filter"><option value="all">全部专题</option></select><select id="collection-parent"><option value="">顶层专题</option></select><input class="grow" id="new-collection-name" placeholder="新专题名称"><button class="small" id="create-collection">创建专题</button><button class="small" id="rename-collection">重命名</button><button class="small" id="delete-collection">删除专题</button></div>
@@ -234,6 +304,29 @@
   <div class="pdf-reader inspector-hidden" id="pdf-reader"><div class="pdf-canvas-stage" id="pdf-canvas-stage"><div class="pdf-pages-container" id="pdf-pages-container"><div class="pdf-page-stack" id="pdf-page-stack" data-pdf-page-stack data-page="1"><canvas class="pdf-page-canvas" id="pdf-canvas"></canvas><div class="textLayer" id="pdf-text-layer" data-translatable></div><div class="pdf-annotation-layer" id="pdf-annotation-layer"></div></div></div></div><aside class="pdf-text-pane hidden" id="pdf-text-pane"><div class="pdf-pane-head"><div class="pdf-pane-tabs" role="tablist" aria-label="阅读信息"><button class="active" role="tab" data-pdf-pane-tab="annotations" aria-selected="true">标注</button><button role="tab" data-pdf-pane-tab="text" aria-selected="false">页面文本</button></div><button class="icon-button" id="pdf-inspector-close" aria-label="关闭阅读信息">×</button></div><section class="pdf-pane-content" id="pdf-pane-annotations"><div class="pdf-pane-summary"><strong>全部标注</strong><span class="mono">H / U / N 快捷标注</span></div><p class="panel-note">拖选文字后可高亮、加下划线或批注；Esc 取消，Ctrl/Cmd+Z 撤销。</p><div class="pdf-annotation-list" id="pdf-annotation-list"></div></section><section class="pdf-pane-content hidden" id="pdf-pane-text"><div class="pdf-pane-summary"><strong>第 <span id="pdf-pane-page">0</span> 页文本</strong><button class="small" id="pdf-copy-page">复制本页</button></div><div class="pdf-extraction-report" id="pdf-extraction-report">等待文本解析</div><div class="pdf-search-results hidden" id="pdf-search-results"></div><div class="pdf-page-text" id="pdf-page-text" data-translatable></div></section></aside></div>
 </div></div>
 <div class="modal" id="metadata-modal"><div class="dialog" style="width:min(650px,95vw)"><div class="dialog-head"><h2>编辑论文元数据</h2><button class="icon-button" data-close-modal="metadata-modal">×</button></div><div class="editor"><input id="metadata-title" placeholder="标题"><textarea id="metadata-authors" placeholder="作者，每行一位"></textarea><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><input id="metadata-date" type="date"><input id="metadata-venue" placeholder="会议或期刊"></div><input id="metadata-doi" placeholder="DOI"><input id="metadata-url" type="url" placeholder="原文网址"><button class="primary" id="save-metadata">保存元数据</button></div></div></div>
+<div class="modal" id="pdf-import-modal"><div class="dialog pdf-import-dialog" aria-labelledby="pdf-import-title">
+  <div class="dialog-head"><div><h2 id="pdf-import-title">PDF 导入中心</h2><span class="pdf-status" id="pdf-import-summary">尚未添加文件</span></div><button class="icon-button" data-close-modal="pdf-import-modal" aria-label="关闭 PDF 导入中心">×</button></div>
+  <div class="pdf-import-dropzone" id="pdf-import-dropzone" tabindex="0"><strong>拖放 PDF 到这里</strong><span>支持多文件、文件夹扫描和失败重试；文件只保存在当前浏览器。</span><div><button class="primary" id="pdf-import-choose">选择 PDF</button><button class="ghost" id="pdf-import-folder">扫描文件夹</button></div></div>
+  <div class="pdf-import-storage" id="pdf-import-storage"></div>
+  <div class="pdf-import-queue" id="pdf-import-queue"></div>
+</div></div>
+<div class="modal" id="appearance-modal"><div class="dialog appearance-dialog" aria-labelledby="appearance-title">
+  <div class="dialog-head"><div><h2 id="appearance-title">界面配置</h2><span class="pdf-status">当前“经典绿”完整保留，可随时恢复</span></div><button class="icon-button" data-close-modal="appearance-modal" aria-label="关闭界面设置">×</button></div>
+  <div class="ui-preset-grid">
+    <button data-ui-preset="classic"><strong>经典绿</strong><span>保留现有编辑风格和卡片布局</span></button>
+    <button data-ui-preset="compact"><strong>紧凑学术</strong><span>高密度列表，适合批量整理</span></button>
+    <button data-ui-preset="focus"><strong>专注阅读</strong><span>暖白纸张、更宽正文和更少干扰</span></button>
+    <button data-ui-preset="accessible"><strong>高可访问</strong><span>高对比、大触控区和清晰焦点</span></button>
+  </div>
+  <div class="appearance-controls">
+    <label>主题<select id="appearance-theme"><option value="system">跟随系统</option><option value="light">明亮</option><option value="dark">深色</option></select></label>
+    <label>信息密度<select id="appearance-density"><option value="comfortable">舒适</option><option value="standard">标准</option><option value="compact">紧凑</option></select></label>
+    <label>字体大小<select id="appearance-font"><option value="0.9">90%</option><option value="1">100%</option><option value="1.1">110%</option><option value="1.2">120%</option><option value="1.3">130%</option></select></label>
+    <label>侧栏<select id="appearance-sidebar"><option value="expanded">展开</option><option value="collapsed">折叠</option></select></label>
+    <label class="appearance-check"><input type="checkbox" id="appearance-motion"> 减少动画</label>
+  </div>
+  <div class="dialog-actions"><button class="primary" id="appearance-save">保存配置</button><button class="ghost" id="appearance-reset">恢复经典设置</button></div>
+</div></div>
 <div class="modal" id="translation-modal"><div class="dialog" id="translation-dialog" tabindex="-1" aria-labelledby="translation-modal-title" style="width:min(650px,95vw)"><div class="dialog-head"><h2 id="translation-modal-title">阅读翻译</h2><button class="icon-button" data-close-modal="translation-modal">×</button></div><div class="translation-settings">
   <div class="translation-engine"><strong id="translation-engine-title">正在检查翻译能力</strong><span id="translation-engine-detail">单词优先查询离线多义词典，段落优先使用浏览器本地模型。</span></div>
   <div class="setting-row"><div><b>启用阅读翻译</b><small>关闭后不再监听单击、选区，也不会发起翻译。</small></div><label class="switch"><input type="checkbox" id="translation-enabled"><span></span></label></div>
@@ -262,6 +355,6 @@
 </aside>
 <aside class="update-banner" id="update-banner" role="status" aria-live="polite"><div><strong>PaperScope 新版本已准备好</strong><span>刷新即可切换到完整新版，不会清除收藏、笔记或生词本。</span></div><div class="update-actions"><button class="primary" id="update-now">立即刷新</button><button class="ghost" id="update-later">稍后</button></div></aside>
 <button class="backtop" id="backtop" title="返回顶部">↑</button><div class="toast" id="toast"></div>
-<script src="./app.js?v=6.3.5"></script>
+<script type="module" src="./app.js?v=6.4.0"></script>
 </body>
 </html>
