@@ -1,12 +1,16 @@
 {
   "name": "paperscope",
-  "version": "6.3.5",
+  "version": "6.4.0",
   "private": true,
   "type": "module",
   "scripts": {
     "build": "node scripts/build-static.mjs",
+    "build:fixture": "node scripts/build-fixture.mjs",
     "start": "node scripts/preview.mjs",
-    "test:pdf-selection": "node scripts/check-pdf-selection.mjs"
+    "test:pdf-selection": "node scripts/check-pdf-selection.mjs",
+    "test:logic": "node --test tests/*.test.mjs",
+    "test:contracts": "node scripts/check-app-contracts.mjs",
+    "test": "npm run test:logic && npm run test:pdf-selection && npm run test:contracts"
   },
   "engines": {
     "node": ">=18"
