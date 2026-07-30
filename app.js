@@ -31,10 +31,11 @@ import {
 import {
   cleanNewsSource,
   groupNewsItems,
+  limitTranslationCache,
   segmentReaderText
 } from './ui-logic.js';
 
-const APP_VERSION = '6.6.0';
+const APP_VERSION = '6.7.0';
 const STORAGE_KEY = 'paperscope-library-v4';
 const V3_STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
@@ -45,7 +46,6 @@ const TRANSLATION_SETTINGS_KEY = 'paperscope-translation-settings-v2';
 const LEGACY_TRANSLATION_SETTINGS_KEY = 'paperscope-translation-settings-v1';
 const TRANSLATION_CACHE_KEY = 'paperscope-translation-cache-v2';
 const LEGACY_TRANSLATION_CACHE_KEY = 'paperscope-translation-cache-v1';
-const TRANSLATION_HISTORY_KEY = 'paperscope-translation-history-v1';
 const PDF_VIEW_MODE_KEY = 'paperscope-pdf-view-mode-v1';
 const PDF_INSPECTOR_OPEN_KEY = 'paperscope-pdf-inspector-open-v1';
 const PDF_INSPECTOR_TAB_KEY = 'paperscope-pdf-inspector-tab-v1';
@@ -93,6 +93,7 @@ const state = {
   pdfModule: null, pdfLibModule: null, tesseractModule: null, ocrWorker: null,
   pdfLoadingTask: null, pdfDocument: null, pdfRecord: null, pdfPaperId: null, pdfPage: 1, pdfScale: 1.4, pdfRenderTask: null,
   pdfTextContent: null, pdfSelection: null, pdfAnnotationMode: null, pdfAnnotationDraft: null, pdfTextSelectionDraft: null, pdfBrowseSelection: null, pdfSuppressWordClick: false, pdfAnnotationHistory: [], libraryPdfMatches: null,
+  pdfSnapshots: [], pdfSnapshotDrag: null, pdfSnapshotZ: 45,
   pdfViewMode: localStorage.getItem(PDF_VIEW_MODE_KEY) === 'paged' ? 'paged' : 'continuous',
   pdfInspectorOpen: initialPdfInspectorSetting === null ? matchMedia('(min-width:1100px)').matches : initialPdfInspectorSetting === 'open',
   pdfInspectorTab: localStorage.getItem(PDF_INSPECTOR_TAB_KEY) === 'text' ? 'text' : 'annotations',
@@ -126,8 +127,11 @@ let translationSettings = {
   ...readJson(LEGACY_TRANSLATION_SETTINGS_KEY, {}),
   ...readJson(TRANSLATION_SETTINGS_KEY, {})
 };
-let translationCache = { ...readJson(LEGACY_TRANSLATION_CACHE_KEY, {}), ...readJson(TRANSLATION_CACHE_KEY, {}) };
-let translationHistory = readJson(TRANSLATION_HISTORY_KEY, []);
+let translationCache = limitTranslationCache({ ...readJson(LEGACY_TRANSLATION_CACHE_KEY, {}), ...readJson(TRANSLATION_CACHE_KEY, {}) });
+try {
+  localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(translationCache));
+  localStorage.removeItem('paperscope-translation-history-v1');
+} catch {}
 const UI_DEFAULTS = {
   preset: 'classic',
   theme: localStorage.getItem(THEME_KEY) || 'system',
@@ -487,6 +491,7 @@ function libraryRecords(tab, collectionId, q, smart = 'unread') {
   }).sort(([, a], [, b]) => new Date(b.queueAt || b.savedAt || b.lastOpenedAt || b.readAt || 0) - new Date(a.queueAt || a.savedAt || a.lastOpenedAt || a.readAt || 0));
 }
 function renderLibraryPage(route) {
+  if (route.parts[1] === 'translations') return navigate('library/vocabulary', route.query, true);
   renderProfile(); const tab = route.parts[1] || 'all'; const q = route.query.q || ''; const collectionId = route.query.collection || 'all'; const smart = route.query.smart || 'unread'; const page = Math.max(1, Number(route.query.page || 1));
   const stats = libraryStats(); for (const [name, value] of Object.entries(stats)) el(`stat-${name}`).textContent = value;
   document.querySelectorAll('#library-tabs [data-tab]').forEach(button => button.classList.toggle('active', button.dataset.tab === tab));
@@ -495,10 +500,9 @@ function renderLibraryPage(route) {
   el('smart-tools').classList.toggle('hidden', tab !== 'smart'); el('smart-filter').value = smart;
   if (tab === 'smart' && route.query.pdfq) el('library-pdf-search').value = route.query.pdfq;
   el('merge-duplicates').classList.toggle('hidden', tab !== 'duplicates');
-  if (['vocabulary', 'translations'].includes(tab)) {
+  if (tab === 'vocabulary') {
     state.batch.clear(); state.visibleLibraryIds = []; updateBatchCount();
-    if (tab === 'vocabulary') return renderVocabularyPage(route);
-    return renderTranslationHistoryPage(route);
+    return renderVocabularyPage(route);
   }
   const records = libraryRecords(tab, collectionId, q, smart); const total = Math.max(1, Math.ceil(records.length / 10)); const safePage = Math.min(page, total); const pageRecords = records.slice((safePage - 1) * 10, safePage * 10);
   const batchContext = `library/${tab}`;
@@ -537,13 +541,6 @@ function renderVocabularyPage(route) {
     return `<article class="vocabulary-row" data-vocabulary-id="${escapeHtml(id)}"><div><h3 data-translatable>${escapeHtml(item.source)}</h3><div class="translation">${escapeHtml(item.translation)}</div><p>${escapeHtml(item.context || '')}</p><div class="tag-row"><span class="tag">${escapeHtml(item.provider || '本地词典')}</span>${senseCount ? `<span class="tag">${senseCount} 个义项</span>` : ''}<span class="tag">掌握 ${Number(item.mastery || 0)}/3</span><span class="tag">查询 ${Number(item.lookups || 1)} 次</span><span class="tag">${escapeHtml(sourceLabel)}</span><span class="tag">${escapeHtml(dateText(item.updatedAt || item.createdAt))}</span></div></div><div class="paper-actions">${paper ? '<button data-vocabulary-action="open">论文</button>' : ''}<button data-vocabulary-action="speak">朗读</button><button data-vocabulary-action="mastery">掌握＋</button><button data-vocabulary-action="copy">复制</button><button data-vocabulary-action="remove" title="删除">×</button></div></article>`;
   }).join('') : '<div class="empty">生词本还是空的。阅读论文时点击英文单词，再选择“加入生词本”。</div>';
   renderPagination('library-pagination', safePage, total, next => navigate('library/vocabulary', { ...route.query, page: next }));
-}
-function renderTranslationHistoryPage(route) {
-  const q = (route.query.q || '').trim().toLowerCase(); const page = Math.max(1, Number(route.query.page || 1));
-  const entries = translationHistory.filter(item => !q || `${item.source} ${item.translation} ${item.context} ${item.provider}`.toLowerCase().includes(q));
-  const total = Math.max(1, Math.ceil(entries.length / 15)); const safePage = Math.min(page, total); const pageEntries = entries.slice((safePage - 1) * 15, safePage * 15);
-  el('library-list').innerHTML = pageEntries.length ? pageEntries.map(item => `<article class="vocabulary-row" data-translation-history-key="${escapeHtml(item.key)}"><div><h3 data-translatable>${escapeHtml(item.source)}</h3><div class="translation">${escapeHtml(item.translation || '尚无译文')}</div><p>${escapeHtml(item.context || '')}</p><div class="tag-row"><span class="tag">${escapeHtml(item.provider || '本地词典')}</span><span class="tag">${escapeHtml(dateText(item.updatedAt, true))}</span></div></div><div class="paper-actions"><button data-translation-history-action="copy">复制</button><button data-translation-history-action="vocabulary">加入生词</button><button data-translation-history-action="remove" title="删除">×</button></div></article>`).join('') : '<div class="empty">还没有翻译历史。点击单词、术语或框选英文后会自动记录。</div>';
-  renderPagination('library-pagination', safePage, total, next => navigate('library/translations', { ...route.query, page: next }));
 }
 function exportVocabulary() {
   const rows = [['source', 'translation', 'context', 'provider', 'mastery', 'paper', 'updated_at']];
@@ -622,7 +619,7 @@ function updateBatchCount() {
   const bar = el('library-batchbar'); if (!bar) return;
   const route = parseRoute(); const tab = route.parts[1] || 'all'; const ids = selectedRecordIds();
   el('batch-count').textContent = `${ids.length} 项已选`;
-  bar.classList.toggle('hidden', !ids.length || ['vocabulary', 'translations'].includes(tab));
+  bar.classList.toggle('hidden', !ids.length || tab === 'vocabulary');
   const visible = state.visibleLibraryIds || [];
   const selectedVisible = visible.filter(id => state.batch.has(id)).length;
   el('library-select-all').checked = Boolean(visible.length && selectedVisible === visible.length);
@@ -689,8 +686,6 @@ async function permanentlyDeleteRecords(ids = selectedRecordIds()) {
     for (const item of Object.values(library.vocabulary || {})) {
       if (valid.includes(item.paperId)) { item.paperTitle ||= library.records[item.paperId]?.paper?.title || ''; item.paperId = null; }
     }
-    translationHistory = translationHistory.map(item => valid.includes(item.paperId) ? { ...item, paperId: null } : item);
-    try { localStorage.setItem(TRANSLATION_HISTORY_KEY, JSON.stringify(translationHistory)); } catch {}
     for (const id of valid) {
       delete library.records[id];
       delete library.recent?.[id];
@@ -1466,7 +1461,7 @@ function updatePdfCurrentPage(pageNumber, { save = true } = {}) {
   renderPdfAnnotationList();
   const attachment = getRecord(state.pdfPaperId)?.pdfAttachment;
   if (save && attachment && attachment.lastPage !== state.pdfPage) { attachment.lastPage = state.pdfPage; saveLibrary(); }
-  const readyLabel = state.pdfAnnotationMode ? '标注工具已启用' : translationSettings.enabled ? '可选择文字翻译' : '可选择文字、复制或标注';
+  const readyLabel = state.pdfAnnotationMode ? '页面工具已启用' : translationSettings.enabled ? '可选择文字翻译' : '可选择文字、复制、标注或截图';
   setPdfProgress(100, text ? `第 ${state.pdfPage} 页 · ${readyLabel}` : `第 ${state.pdfPage} 页 · 未检测到文本层`);
 }
 async function renderPdfPage() {
@@ -1613,7 +1608,8 @@ function renderPdfAnnotationLayer(viewport, pageNumber = state.pdfPage, layer = 
       layer.appendChild(mark);
     }
   }
-  layer.classList.toggle('drawing', ['area', 'area-note'].includes(state.pdfAnnotationMode));
+  layer.classList.toggle('drawing', ['area', 'area-note', 'snapshot'].includes(state.pdfAnnotationMode));
+  layer.classList.toggle('snapshot', state.pdfAnnotationMode === 'snapshot');
 }
 function annotationTypeLabel(type) { return type === 'highlight' ? '高亮' : type === 'underline' ? '下划线' : type === 'note' ? '批注' : '区域'; }
 function preferredReaderControlsPlacement() {
@@ -2112,7 +2108,7 @@ function clearPdfBrowseSelection() {
   value.previewNodes?.forEach(node => node.remove());
   if (state.pdfSelection === value.selection) state.pdfSelection = null;
   state.pdfBrowseSelection = null;
-  if (!state.pdfAnnotationMode && el('pdf-modal')?.classList.contains('open')) el('pdf-tool-status').textContent = '浏览模式 · 拖选文字后可翻译、复制或标注';
+  if (!state.pdfAnnotationMode && el('pdf-modal')?.classList.contains('open')) el('pdf-tool-status').textContent = '浏览模式 · 拖选文字可翻译，S 框选截图';
   return true;
 }
 function pdfDraftPointInLayout(draft, event) {
@@ -2193,10 +2189,13 @@ function renderAllPdfAnnotationLayers() {
 function updatePdfAnnotationMode() {
   document.querySelectorAll('[data-pdf-tool]').forEach(button => button.classList.toggle('active', button.dataset.pdfTool === state.pdfAnnotationMode));
   document.querySelectorAll('[data-pdf-page-stack]').forEach(stack => stack.classList.toggle('annotation-select', Boolean(pdfSelectionToolType())));
-  document.querySelectorAll('.pdf-annotation-layer').forEach(layer => layer.classList.toggle('drawing', ['area', 'area-note'].includes(state.pdfAnnotationMode)));
-  const labels = { highlight: '高亮工具 H · 拖选后自动保存', underline: '下划线工具 U · 拖选后自动保存', note: '文字批注 N · 拖选后填写批注', area: '区域工具 R · 拖出矩形', 'area-note': '区域批注 Shift+N · 拖出矩形' };
+  document.querySelectorAll('.pdf-annotation-layer').forEach(layer => {
+    layer.classList.toggle('drawing', ['area', 'area-note', 'snapshot'].includes(state.pdfAnnotationMode));
+    layer.classList.toggle('snapshot', state.pdfAnnotationMode === 'snapshot');
+  });
+  const labels = { highlight: '高亮工具 H · 拖选后自动保存', underline: '下划线工具 U · 拖选后自动保存', note: '文字批注 N · 拖选后填写批注', area: '区域工具 R · 拖出矩形', 'area-note': '区域批注 Shift+N · 拖出矩形', snapshot: '截图工具 S · 在页面上拖出对照区域' };
   const selected = state.pdfBrowseSelection?.selection;
-  el('pdf-tool-status').textContent = labels[state.pdfAnnotationMode] || (selected ? `已选择 ${selected.text.length} 字 · H 高亮 / U 下划线 / N 批注 / Ctrl+C 复制 / Esc 取消` : '浏览模式 · 拖选文字后可翻译、复制或标注');
+  el('pdf-tool-status').textContent = labels[state.pdfAnnotationMode] || (selected ? `已选择 ${selected.text.length} 字 · H 高亮 / U 下划线 / N 批注 / Ctrl+C 复制 / Esc 取消` : '浏览模式 · 拖选文字可翻译，S 框选截图');
   clearTimeout(state.translationSelectionTimer);
   if (state.pdfAnnotationMode) closeTranslationPopover();
 }
@@ -2225,8 +2224,63 @@ function cancelPdfAnnotationInteraction({ quiet = false } = {}) {
   }
   state.pdfAnnotationMode = null; clearPdfBrowseSelection(); state.pdfSelection = null; window.getSelection()?.removeAllRanges();
   closeTranslationPopover(); updatePdfAnnotationMode();
-  if (hadAnnotation && !quiet) toast('已取消当前标注工具');
+  if (hadAnnotation && !quiet) toast('已取消当前工具');
   return hadInteraction;
+}
+function bringPdfSnapshotToFront(card) {
+  if (!card) return;
+  state.pdfSnapshotZ += 1;
+  card.style.zIndex = String(state.pdfSnapshotZ);
+}
+function removePdfSnapshot(snapshotId) {
+  const index = state.pdfSnapshots.findIndex(item => item.id === snapshotId);
+  if (index < 0) return;
+  const [snapshot] = state.pdfSnapshots.splice(index, 1);
+  URL.revokeObjectURL(snapshot.url);
+  el('pdf-snapshot-layer').querySelector(`[data-pdf-snapshot-id="${snapshotId}"]`)?.remove();
+}
+function addPdfSnapshotWindow(snapshot) {
+  const layer = el('pdf-snapshot-layer');
+  const card = document.createElement('section');
+  const offset = state.pdfSnapshots.length * 24;
+  const width = Math.min(390, Math.max(260, window.innerWidth - 28));
+  card.className = 'pdf-snapshot-card';
+  card.dataset.pdfSnapshotId = snapshot.id;
+  card.setAttribute('role', 'dialog');
+  card.setAttribute('aria-label', `PDF 第 ${snapshot.page} 页截图对照`);
+  card.style.left = `${Math.max(12, window.innerWidth - width - 28 - offset)}px`;
+  card.style.top = `${Math.min(Math.max(18, 72 + offset), Math.max(18, window.innerHeight - 220))}px`;
+  card.innerHTML = `<header class="pdf-snapshot-head"><div class="pdf-snapshot-title"><strong>${escapeHtml(snapshot.paperTitle)}</strong><span>第 ${snapshot.page} 页 · 截图对照</span></div><div class="pdf-snapshot-actions"><button type="button" data-pdf-snapshot-action="shrink" aria-label="缩小截图">−</button><button type="button" data-pdf-snapshot-action="grow" aria-label="放大截图">＋</button><button type="button" data-pdf-snapshot-action="close" aria-label="关闭截图">×</button></div></header><img src="${snapshot.url}" alt="${escapeHtml(snapshot.paperTitle)} 第 ${snapshot.page} 页截图"><footer class="pdf-snapshot-foot"><span>拖动标题移动 · 右下角缩放</span><span>临时内存，不写入存储</span></footer>`;
+  layer.appendChild(card);
+  bringPdfSnapshotToFront(card);
+}
+async function createPdfSnapshot(pageNumber, rect) {
+  const stack = pdfStackForPage(pageNumber);
+  const canvas = stack?.querySelector('.pdf-page-canvas');
+  if (!canvas?.width || !canvas?.height) return toast('当前页面尚未完成渲染，请稍后重试');
+  const sourceX = Math.max(0, Math.floor(rect.x * canvas.width));
+  const sourceY = Math.max(0, Math.floor(rect.y * canvas.height));
+  const sourceWidth = Math.max(1, Math.min(canvas.width - sourceX, Math.ceil(rect.width * canvas.width)));
+  const sourceHeight = Math.max(1, Math.min(canvas.height - sourceY, Math.ceil(rect.height * canvas.height)));
+  const outputScale = Math.min(1, 1800 / sourceWidth, 1800 / sourceHeight);
+  const output = document.createElement('canvas');
+  output.width = Math.max(1, Math.round(sourceWidth * outputScale));
+  output.height = Math.max(1, Math.round(sourceHeight * outputScale));
+  output.getContext('2d', { alpha: false }).drawImage(canvas, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, output.width, output.height);
+  const blob = await new Promise(resolve => output.toBlob(resolve, 'image/png', .92));
+  if (!blob) return toast('截图生成失败，请重新框选');
+  while (state.pdfSnapshots.length >= 4) removePdfSnapshot(state.pdfSnapshots[0].id);
+  const snapshot = {
+    id: crypto.randomUUID ? crypto.randomUUID() : `snapshot-${Date.now()}`,
+    page: pageNumber,
+    paperTitle: getPaper(state.pdfPaperId)?.title || state.pdfRecord?.fileName || 'PDF 截图',
+    url: URL.createObjectURL(blob)
+  };
+  addPdfSnapshotWindow(snapshot);
+  state.pdfSnapshots.push(snapshot);
+  state.pdfAnnotationMode = null;
+  updatePdfAnnotationMode();
+  toast(`第 ${pageNumber} 页截图已置顶，可拖动对照`);
 }
 async function addPdfAreaAnnotation(type, rect) {
   const annotationType = type === 'area-note' ? 'note' : 'area';
@@ -2751,20 +2805,8 @@ function storeTranslation(text, translation, details = {}) {
   const now = new Date().toISOString();
   const key = translationCacheKey(text);
   translationCache[key] = { translation, ...details, usedAt: now, createdAt: translationCache[key]?.createdAt || now };
-  translationCache = Object.fromEntries(Object.entries(translationCache).sort(([, a], [, b]) => new Date(b.usedAt) - new Date(a.usedAt)).slice(0, 500));
+  translationCache = limitTranslationCache(translationCache);
   try { localStorage.setItem(TRANSLATION_CACHE_KEY, JSON.stringify(translationCache)); } catch {}
-}
-function rememberTranslation(payload) {
-  if (!payload?.source) return;
-  const key = translationCacheKey(payload.source);
-  translationHistory = [
-    {
-      key, source: payload.source, translation: payload.translation || '', context: payload.context || '',
-      provider: payload.provider || '离线词典', paperId: payload.paperId || null, updatedAt: new Date().toISOString()
-    },
-    ...translationHistory.filter(item => item.key !== key)
-  ].slice(0, 200);
-  try { localStorage.setItem(TRANSLATION_HISTORY_KEY, JSON.stringify(translationHistory)); } catch {}
 }
 function translationAvailabilityStatus(value) {
   if (['available', 'readily'].includes(value)) return 'available';
@@ -3027,7 +3069,7 @@ function applyTranslationResult(result, sourceLabel) {
     el('translation-alternatives').innerHTML = payload.alternatives.map(value => `<button data-translation-alternative="${escapeHtml(value)}">${escapeHtml(value)}</button>`).join('');
     el('translation-alternatives-section').classList.remove('hidden');
   }
-  setTranslationActions(true); rememberTranslation(payload);
+  setTranslationActions(true);
 }
 async function requestOnlineTranslation(payload = state.translationPayload) {
   const endpoint = safeTranslationEndpoint();
@@ -3360,22 +3402,6 @@ el('library-list').addEventListener('click', event => {
     else if (action === 'remove') { delete library.vocabulary[id]; saveLibrary(); renderRoute(); toast('词条已删除'); }
     return;
   }
-  const historyRow = event.target.closest('[data-translation-history-key]');
-  if (historyRow) {
-    const key = historyRow.dataset.translationHistoryKey; const item = translationHistory.find(entry => entry.key === key);
-    const action = event.target.closest('[data-translation-history-action]')?.dataset.translationHistoryAction;
-    if (action === 'copy' && item) copyText(`${item.source}\n${item.translation}`, '翻译已复制');
-    else if (action === 'vocabulary' && item) {
-      const id = vocabularyId(item.paperId, item.source); const previous = library.vocabulary[id];
-      library.vocabulary[id] = { id, ...item, lookups: Number(previous?.lookups || 0) + 1, mastery: Number(previous?.mastery || 0), createdAt: previous?.createdAt || new Date().toISOString(), updatedAt: new Date().toISOString() };
-      saveLibrary(); toast(previous ? '生词条目已更新' : '已加入生词本');
-    } else if (action === 'remove') {
-      translationHistory = translationHistory.filter(entry => entry.key !== key);
-      try { localStorage.setItem(TRANSLATION_HISTORY_KEY, JSON.stringify(translationHistory)); } catch {}
-      renderRoute(); toast('翻译历史已删除');
-    }
-    return;
-  }
   const row = event.target.closest('[data-library-id]'); if (!row) return; const id = row.dataset.libraryId; const action = event.target.closest('[data-library-action]')?.dataset.libraryAction;
   if (action === 'open') openPaperRoute(id);
   else if (action === 'pdf') openPdfReader(id);
@@ -3524,6 +3550,7 @@ el('pdf-reparse').addEventListener('click', reparsePdfText);
 el('pdf-ocr-page').addEventListener('click', ocrCurrentPdfPage);
 el('pdf-ocr-missing').addEventListener('click', ocrMissingPdfPages);
 document.querySelectorAll('[data-pdf-tool]').forEach(button => button.addEventListener('click', () => applyOrTogglePdfAnnotationTool(button.dataset.pdfTool)));
+el('pdf-snapshot-page').addEventListener('click', () => createPdfSnapshot(state.pdfPage, { x: 0, y: 0, width: 1, height: 1 }));
 el('pdf-cancel-annotation').addEventListener('click', () => cancelPdfAnnotationInteraction());
 el('pdf-undo-annotation').addEventListener('click', undoPdfAnnotation);
 el('pdf-export-annotated').addEventListener('click', exportAnnotatedPdf);
@@ -3603,13 +3630,13 @@ el('pdf-canvas-stage').addEventListener('pointerdown', event => {
     if (pageNumber) updatePdfCurrentPage(pageNumber);
     renderPdfAnnotationList(mark.dataset.annotationId); return;
   }
-  if (!['area', 'area-note'].includes(state.pdfAnnotationMode)) return;
+  if (!['area', 'area-note', 'snapshot'].includes(state.pdfAnnotationMode)) return;
   const stack = layer.closest('[data-pdf-page-stack]'); const pageNumber = Number(stack?.dataset.page);
   if (!pageNumber) return;
   updatePdfCurrentPage(pageNumber);
   const bounds = layer.getBoundingClientRect();
   const x = Math.max(0, Math.min(bounds.width, event.clientX - bounds.left)); const y = Math.max(0, Math.min(bounds.height, event.clientY - bounds.top));
-  const draft = document.createElement('div'); draft.className = 'pdf-annotation-draft'; draft.style.left = `${x}px`; draft.style.top = `${y}px`; layer.appendChild(draft);
+  const draft = document.createElement('div'); draft.className = `pdf-annotation-draft${state.pdfAnnotationMode === 'snapshot' ? ' snapshot' : ''}`; draft.style.left = `${x}px`; draft.style.top = `${y}px`; layer.appendChild(draft);
   state.pdfAnnotationDraft = { pointerId: event.pointerId, x, y, bounds, draft, mode: state.pdfAnnotationMode, layer, pageNumber }; layer.setPointerCapture(event.pointerId);
 });
 el('pdf-canvas-stage').addEventListener('pointermove', event => {
@@ -3621,9 +3648,49 @@ el('pdf-canvas-stage').addEventListener('pointerup', async event => {
   const value = state.pdfAnnotationDraft; if (!value || value.pointerId !== event.pointerId) return; state.pdfAnnotationDraft = null;
   const x = Math.max(0, Math.min(value.bounds.width, event.clientX - value.bounds.left)); const y = Math.max(0, Math.min(value.bounds.height, event.clientY - value.bounds.top));
   value.draft.remove(); const width = Math.abs(x - value.x); const height = Math.abs(y - value.y);
-  if (width < 8 || height < 8) return toast('请拖出一个更大的标注区域');
+  if (width < 8 || height < 8) return toast(`请拖出一个更大的${value.mode === 'snapshot' ? '截图' : '标注'}区域`);
   state.pdfPage = value.pageNumber;
-  await addPdfAreaAnnotation(value.mode, { x: Math.min(value.x, x) / value.bounds.width, y: Math.min(value.y, y) / value.bounds.height, width: width / value.bounds.width, height: height / value.bounds.height });
+  const rect = { x: Math.min(value.x, x) / value.bounds.width, y: Math.min(value.y, y) / value.bounds.height, width: width / value.bounds.width, height: height / value.bounds.height };
+  if (value.mode === 'snapshot') await createPdfSnapshot(value.pageNumber, rect);
+  else await addPdfAreaAnnotation(value.mode, rect);
+});
+el('pdf-snapshot-layer').addEventListener('pointerdown', event => {
+  const card = event.target.closest('[data-pdf-snapshot-id]');
+  if (!card) return;
+  bringPdfSnapshotToFront(card);
+  const handle = event.target.closest('.pdf-snapshot-head');
+  if (!handle || event.target.closest('button')) return;
+  event.preventDefault();
+  const bounds = card.getBoundingClientRect();
+  state.pdfSnapshotDrag = { card, handle, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, left: bounds.left, top: bounds.top };
+  handle.setPointerCapture(event.pointerId);
+});
+el('pdf-snapshot-layer').addEventListener('pointermove', event => {
+  const drag = state.pdfSnapshotDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  event.preventDefault();
+  const left = Math.max(6, Math.min(window.innerWidth - drag.card.offsetWidth - 6, drag.left + event.clientX - drag.startX));
+  const top = Math.max(6, Math.min(window.innerHeight - 52, drag.top + event.clientY - drag.startY));
+  drag.card.style.left = `${left}px`; drag.card.style.top = `${top}px`;
+});
+function finishPdfSnapshotDrag(event) {
+  const drag = state.pdfSnapshotDrag;
+  if (!drag || drag.pointerId !== event.pointerId) return;
+  try { drag.handle.releasePointerCapture(event.pointerId); } catch {}
+  state.pdfSnapshotDrag = null;
+}
+el('pdf-snapshot-layer').addEventListener('pointerup', finishPdfSnapshotDrag);
+el('pdf-snapshot-layer').addEventListener('pointercancel', finishPdfSnapshotDrag);
+el('pdf-snapshot-layer').addEventListener('click', event => {
+  const card = event.target.closest('[data-pdf-snapshot-id]');
+  const action = event.target.closest('[data-pdf-snapshot-action]')?.dataset.pdfSnapshotAction;
+  if (!card || !action) return;
+  if (action === 'close') return removePdfSnapshot(card.dataset.pdfSnapshotId);
+  const factor = action === 'grow' ? 1.18 : .84;
+  const width = Math.max(240, Math.min(Math.min(760, window.innerWidth - 20), card.getBoundingClientRect().width * factor));
+  card.style.width = `${width}px`;
+  const currentLeft = card.getBoundingClientRect().left;
+  card.style.left = `${Math.max(6, Math.min(window.innerWidth - width - 6, currentLeft))}px`;
 });
 el('pdf-annotation-list').addEventListener('click', async event => {
   const item = event.target.closest('[data-pdf-annotation-id]'); if (!item) return; const id = item.dataset.pdfAnnotationId;
@@ -3642,7 +3709,7 @@ el('previous-paper').addEventListener('click', () => moveDetail(-1)); el('next-p
 el('open-compare').addEventListener('click', renderCompare); el('clear-compare').addEventListener('click', () => { state.compare.clear(); updateCompareTray(); renderCurrentView(); }); el('compare-table').addEventListener('click', event => { const button = event.target.closest('[data-compare-remove]'); if (button) { state.compare.delete(button.dataset.compareRemove); updateCompareTray(); renderCompare(); } });
 el('command-open').addEventListener('click', () => openCommand()); el('command-input').addEventListener('input', event => renderCommands(event.target.value)); el('command-list').addEventListener('click', event => { const route = event.target.closest('[data-command-route]')?.dataset.commandRoute; const paper = event.target.closest('[data-command-paper]')?.dataset.commandPaper; closeModal('command-modal'); if (route) navigate(route); else if (paper) openPaperRoute(paper); });
 el('translation-open').addEventListener('click', openTranslationSettings);
-function mobileMoreItems() { return [...el('mobile-more-menu').querySelectorAll('[role="menuitem"]:not([disabled])')]; }
+function mobileMoreItems() { return [...el('mobile-more-menu').querySelectorAll('[role="menuitem"]:not([disabled])')].filter(item => getComputedStyle(item).display !== 'none'); }
 function closeMobileMore({ restoreFocus = false } = {}) {
   const menu = el('mobile-more-menu'); if (!menu.classList.contains('open')) return;
   menu.classList.remove('open'); el('mobile-more').setAttribute('aria-expanded', 'false');
@@ -3666,7 +3733,6 @@ el('mobile-more-menu').addEventListener('keydown', event => {
 });
 el('mobile-import-pdf').addEventListener('click', () => { closeMobileMore(); openPdfImportCenter(); });
 el('mobile-backup').addEventListener('click', () => { closeMobileMore(); exportCompleteBackup(); });
-el('mobile-shortcuts').addEventListener('click', () => { closeMobileMore(); navigate('settings'); setTimeout(() => el('settings-help')?.scrollIntoView({ behavior: 'smooth' }), 80); });
 document.addEventListener('click', event => {
   if (!el('mobile-more-menu').classList.contains('open') || event.target.closest('#mobile-more-menu,#mobile-more')) return;
   closeMobileMore();
@@ -3695,9 +3761,9 @@ el('translation-download-dictionary').addEventListener('click', downloadComplete
 el('translation-test-endpoint').addEventListener('click', testTranslationEndpoint);
 el('translation-reset-position').addEventListener('click', resetTranslationPosition);
 el('translation-clear-cache').addEventListener('click', () => {
-  translationCache = {}; translationHistory = [];
-  localStorage.removeItem(TRANSLATION_CACHE_KEY); localStorage.removeItem(TRANSLATION_HISTORY_KEY);
-  toast('翻译缓存与查询历史已清除');
+  translationCache = {};
+  localStorage.removeItem(TRANSLATION_CACHE_KEY);
+  toast('翻译缓存已清除');
 });
 el('translation-open-vocabulary').addEventListener('click', () => { closeModal('translation-modal'); navigate('library/vocabulary'); });
 el('translation-pin').addEventListener('click', toggleTranslationPin);
@@ -3711,7 +3777,7 @@ el('translation-alternatives').addEventListener('click', event => {
   const button = event.target.closest('[data-translation-alternative]'); if (!button || !state.translationPayload) return;
   state.translationPayload.translation = button.dataset.translationAlternative;
   el('translation-result').textContent = state.translationPayload.translation;
-  setTranslationActions(true); rememberTranslation(state.translationPayload); toast('已切换为该译法');
+  setTranslationActions(true); toast('已切换为该译法');
 });
 el('update-now').addEventListener('click', () => {
   const waiting = state.serviceWorkerRegistration?.waiting;
@@ -3731,7 +3797,7 @@ document.addEventListener('keydown', event => {
   }
   if (pdfOpen && !editing && !event.ctrlKey && !event.metaKey && !event.altKey) {
     const key = event.key.toLowerCase();
-    const tool = event.shiftKey && key === 'n' ? 'area-note' : ({ h: 'highlight', u: 'underline', n: 'note', r: 'area' })[key];
+    const tool = event.shiftKey && key === 'n' ? 'area-note' : ({ h: 'highlight', u: 'underline', n: 'note', r: 'area', s: 'snapshot' })[key];
     if (tool) { event.preventDefault(); applyOrTogglePdfAnnotationTool(tool); return; }
     if (event.key === 'PageUp' && state.pdfPage > 1) { event.preventDefault(); goToPdfPage(state.pdfPage - 1); return; }
     if (event.key === 'PageDown' && state.pdfDocument && state.pdfPage < state.pdfDocument.numPages) { event.preventDefault(); goToPdfPage(state.pdfPage + 1); return; }
@@ -3834,13 +3900,13 @@ window.addEventListener('hashchange', renderRoute); window.addEventListener('res
   if (el('translation-popover').classList.contains('open')) positionTranslationPopover(state.translationPayload?.rect || { left: 20, top: 20, bottom: 21, width: 1, height: 1 });
 });
 async function promptAppInstall() {
+  closeMobileMore();
   if (!state.installPrompt) return toast('当前浏览器暂未提供安装提示，可使用浏览器菜单安装此应用');
-  state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; el('install-app').classList.remove('show');
+  state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; el('install-app-state').textContent = '浏览器';
 }
-window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); state.installPrompt = event; el('install-app').classList.add('show'); });
+window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); state.installPrompt = event; el('install-app-state').textContent = '可安装'; });
 el('install-app').addEventListener('click', promptAppInstall);
-el('settings-install').addEventListener('click', promptAppInstall);
-window.addEventListener('appinstalled', () => toast('PaperScope 已安装'));
+window.addEventListener('appinstalled', () => { state.installPrompt = null; el('install-app-state').textContent = '已安装'; toast('PaperScope 已安装'); });
 
 applyUiSettings(); applyTranslationSettings(); setupTranslationDragging(); loadDomainDictionary().catch(() => {}); detectTranslationCapability(); renderProfile(); renderCollectionOptions('all'); if (!location.hash.startsWith('#/')) history.replaceState(null, '', '#/home'); registerAppServiceWorker(); loadData();
 openPdfDatabase().then(async () => {
