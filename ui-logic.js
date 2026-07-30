@@ -124,3 +124,20 @@ export function segmentReaderText(text = '', maxChars = 720) {
   flush();
   return blocks;
 }
+
+export function limitTranslationCache(cache = {}, { maxEntries = 300, maxChars = 350_000 } = {}) {
+  const entries = Object.entries(cache)
+    .filter(([key, value]) => key && value?.translation)
+    .sort(([, a], [, b]) => new Date(b.usedAt || b.createdAt || 0) - new Date(a.usedAt || a.createdAt || 0));
+  const limited = {};
+  let serializedChars = 2;
+
+  for (const [key, value] of entries) {
+    if (Object.keys(limited).length >= maxEntries) break;
+    const entryChars = JSON.stringify(key).length + JSON.stringify(value).length + 2;
+    if (serializedChars + entryChars > maxChars) continue;
+    limited[key] = value;
+    serializedChars += entryChars;
+  }
+  return limited;
+}

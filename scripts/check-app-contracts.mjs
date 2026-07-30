@@ -28,6 +28,10 @@ for (const id of [
   'pdf-sidebar-controls-slot',
   'pdf-text-mode',
   'pdf-translate-page',
+  'pdf-snapshot-selection',
+  'pdf-snapshot-page',
+  'pdf-snapshot-layer',
+  'install-app-state',
   'appearance-reader-controls',
   'appearance-reader-text'
 ]) assert.match(html, new RegExp(`id="${id}"`), `${id} must exist`);
@@ -37,8 +41,13 @@ assert.match(html, /id="mobile-more"[^>]*aria-haspopup="menu"[^>]*aria-controls=
 assert.match(html, /class="nav-group-label">工作台/, 'desktop navigation must expose grouped sections');
 assert.match(html, /class="nav-group-label">研究内容/, 'research routes must have a distinct navigation section');
 assert.match(html, /class="nav-group-label">资料与动态/, 'library and news routes must have a distinct navigation section');
+const moreMenu = html.slice(html.indexOf('<div class="mobile-more-menu"'), html.indexOf('<main class="main">'));
+assert.match(moreMenu, /id="install-app"/, 'app installation must live in More');
+assert.doesNotMatch(moreMenu, /data-route="settings"|翻译历史|快捷键与帮助/, 'More must not duplicate settings or expose dead-end helpers');
 assert.match(html, /id="library-batchbar"[^>]*class="batchbar hidden"|class="batchbar hidden"[^>]*id="library-batchbar"/, 'batch toolbar must be hidden until selection');
 assert.match(html, /\.paper-title:hover h3[\s\S]+text-decoration-color:currentColor/, 'paper titles must expose hover feedback');
+assert.match(html, /\.paper-title h3[\s\S]+cursor:pointer/, 'paper title text must keep link cursor semantics');
+assert.ok(html.indexOf('id="detail-link"') < html.indexOf('<div class="drawer-actions">'), 'original paper link must stay above secondary drawer actions');
 assert.match(html, /\.library-row\.selected[\s\S]+box-shadow:inset 4px 0 var\(--green\)/, 'selected library rows need a persistent visual state');
 assert.doesNotMatch(html.slice(html.lastIndexOf('<style>')), /\.page-head \.page-actions\s*\{\s*display:none/, 'final responsive overrides must keep page actions visible');
 assert.match(storage, /const DOCUMENT_STORE = 'pdfDocuments'/);
@@ -55,8 +64,12 @@ assert.match(app, /function permanentlyDeleteRecords\(/, 'permanent delete workf
 assert.match(app, /groupNewsItems\(filtered, groupMode\)/, 'news must be ordered into meaningful groups');
 assert.match(app, /function renderPdfPageText\(/, 'PDF side text must have structured rendering');
 assert.match(app, /function placePdfReaderControls\(/, 'PDF controls must support top and sidebar placement');
+assert.match(app, /function createPdfSnapshot\([\s\S]+canvas\.toBlob[\s\S]+URL\.createObjectURL/, 'PDF screenshot selections must become temporary floating images');
+assert.match(app, /pdfSnapshots\.length >= 4/, 'temporary screenshot windows must remain bounded');
+assert.doesNotMatch(app, /TRANSLATION_HISTORY_KEY|rememberTranslation|translationHistory/, 'redundant translation history persistence must be removed');
 assert.match(uiLogic, /export function segmentReaderText\(/, 'reader text segmentation must remain independently testable');
 assert.match(uiLogic, /export function groupNewsItems\(/, 'news grouping must remain independently testable');
+assert.match(uiLogic, /export function limitTranslationCache\(/, 'translation cache capacity must remain independently testable');
 assert.match(app, /event\.key === 'Escape'[\s\S]+closeMobileMore/, 'More menu must close with Escape');
 assert.ok(Array.isArray(manifest.file_handlers) && manifest.file_handlers[0].accept['application/pdf'].includes('.pdf'));
 
