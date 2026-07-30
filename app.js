@@ -1,4 +1,5 @@
 import {
+  deleteAllPdfAttachments,
   deletePdfAttachment,
   deletePdfImportJob,
   estimateStorage,
@@ -14,17 +15,23 @@ import {
   searchPdfTextIndex
 } from './pdf-storage.js';
 import {
+  applyBatchAction,
   derivePdfMetadata,
   findPdfPaperMatch,
+  isActiveRecord,
+  isLibraryRecord,
   isRecordRead,
   libraryStatistics,
+  migrateLibraryData,
   pdfFileFingerprint,
   recordHasNotes,
-  setRecordRead
+  setRecordRead,
+  validateCollectionTree
 } from './library-logic.js';
 
-const APP_VERSION = '6.4.0';
-const STORAGE_KEY = 'paperscope-library-v3';
+const APP_VERSION = '6.5.0';
+const STORAGE_KEY = 'paperscope-library-v4';
+const V3_STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
 const LEGACY_SAVED_KEY = 'paperscope-saved';
 const THEME_KEY = 'paperscope-theme';
@@ -69,7 +76,7 @@ const AREA_CONFIG = {
   }
 };
 
-const ROUTE_NAMES = { home: '概览', ai: 'AI 论文', architecture: '体系结构', curated: '顶会期刊精选', library: '个人文献库', news: '研究资讯', venues: '会议期刊', paper: '论文详情' };
+const ROUTE_NAMES = { home: '概览', ai: 'AI 论文', architecture: '体系结构', curated: '顶会期刊精选', library: '个人文献库', news: '研究资讯', venues: '会议期刊', settings: '设置', paper: '论文详情' };
 const state = {
   datasets: { ai: null, architecture: null }, news: null, venues: null, curated: null, loaded: false,
   compare: new Set(), batch: new Set(), returnHash: null, selectedPaperId: null,
@@ -93,21 +100,17 @@ const state = {
 function readJson(key, fallback) { try { return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback)); } catch { return fallback; } }
 function defaultLibrary() {
   return {
-    version: 3,
+    version: 4,
     profile: { name: '研究者', focus: 'AI · 计算机体系结构', bio: '建立自己的研究脉络。', createdAt: new Date().toISOString() },
-    records: {}, collections: {}, savedVenues: [], dailyProgress: {}, vocabulary: {}
+    records: {}, recent: {}, collections: {}, savedVenues: [], dailyProgress: {}, vocabulary: {}
   };
 }
 function migrateLibrary() {
   const current = readJson(STORAGE_KEY, null);
-  if (current?.version === 3) return { ...defaultLibrary(), ...current, profile: { ...defaultLibrary().profile, ...(current.profile || {}) }, records: current.records || {}, collections: current.collections || {}, savedVenues: current.savedVenues || [], dailyProgress: current.dailyProgress || {}, vocabulary: current.vocabulary || {} };
-  const old = readJson(V2_STORAGE_KEY, null);
+  if (current?.version === 4) return migrateLibraryData(current, defaultLibrary);
+  const old = readJson(V3_STORAGE_KEY, null) || readJson(V2_STORAGE_KEY, null);
   if (!old?.records) return defaultLibrary();
-  const records = Object.fromEntries(Object.entries(old.records).map(([id, record]) => [id, {
-    ...record, queueAt: record.queueAt || null, lastOpenedAt: record.lastOpenedAt || record.readAt || null,
-    progress: Number(record.progress || (record.readAt ? 100 : 0)), collections: Array.isArray(record.collections) ? record.collections : []
-  }]));
-  const migrated = { ...defaultLibrary(), profile: { ...defaultLibrary().profile, ...(old.profile || {}) }, records };
+  const migrated = migrateLibraryData(old, defaultLibrary);
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(migrated)); } catch {}
   return migrated;
 }
@@ -140,7 +143,28 @@ function saveLibrary() {
 }
 function escapeHtml(value = '') { return String(value).replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]); }
 function safeUrl(value = '') { try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) ? url.href : '#'; } catch { return '#'; } }
-function toast(text) { const node = el('toast'); node.textContent = text; node.classList.add('show'); clearTimeout(toast.timer); toast.timer = setTimeout(() => node.classList.remove('show'), 2700); }
+function toast(text, { actionLabel = '', onAction = null, duration = 2700 } = {}) {
+  const node = el('toast');
+  node.replaceChildren();
+  const message = document.createElement('span');
+  message.textContent = text;
+  node.append(message);
+  node.classList.toggle('has-action', Boolean(actionLabel && onAction));
+  if (actionLabel && onAction) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = actionLabel;
+    button.addEventListener('click', () => {
+      clearTimeout(toast.timer);
+      node.classList.remove('show');
+      onAction();
+    }, { once: true });
+    node.append(button);
+  }
+  node.classList.add('show');
+  clearTimeout(toast.timer);
+  toast.timer = setTimeout(() => node.classList.remove('show'), duration);
+}
 function dateText(value, withTime = false) {
   if (!value || Number.isNaN(new Date(value).getTime())) return '—';
   return new Intl.DateTimeFormat('zh-CN', withTime ? { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' } : { year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(value));
@@ -180,16 +204,18 @@ function snapshotPaper(paper) {
   return { id: paper.id, arxivId: paper.arxivId || null, arxivUrl: paper.arxivUrl || null, title: paper.title, abstract: paper.abstract || '', authors: paper.authors || [], published: paper.published || null, updated: paper.updated || null, venue: paper.venue || '', venueName: paper.venueName || null, venueYear: paper.venueYear || null, venueType: paper.venueType || null, track: paper.track || '', officialUrl: paper.officialUrl || null, link: safeUrl(paper.link), source: paper.source || '', kind: paper.kind || 'preprint', doi: paper.doi || null, journalRef: paper.journalRef || null, citationCount: Number(paper.citationCount || 0), qualityScore: Number(paper.qualityScore || 0), quality: paper.quality || null, area: paper.area || 'ai', publication: paper.publication || null };
 }
 function ensureRecord(paper) {
-  if (!paper) return null; const old = library.records[paper.id] || {};
+  if (!paper) return null; const old = library.records[paper.id] || library.recent?.[paper.id] || {};
   library.records[paper.id] = {
     paper: snapshotPaper(paper), savedAt: old.savedAt || null, queueAt: old.queueAt || null, readAt: old.readAt || null,
-    lastOpenedAt: old.lastOpenedAt || null, progress: Number(old.progress || 0), note: old.note || '', tags: Array.isArray(old.tags) ? old.tags : [],
+    lastOpenedAt: old.lastOpenedAt || null, archivedAt: old.archivedAt || null, trashAt: old.trashAt || null,
+    progress: Number(old.progress || 0), note: old.note || '', tags: Array.isArray(old.tags) ? old.tags : [],
     highlights: Array.isArray(old.highlights) ? old.highlights : [], collections: Array.isArray(old.collections) ? old.collections : [],
     publication: old.publication || paper.publication || null, abstractTranslation: old.abstractTranslation || null,
     pdfAttachment: old.pdfAttachment || null,
     pdfAttachments: Array.isArray(old.pdfAttachments) ? old.pdfAttachments : old.pdfAttachment ? [old.pdfAttachment] : [],
     lineage: old.lineage || null, metadataOverrides: old.metadataOverrides || null
   };
+  if (library.recent) delete library.recent[paper.id];
   return library.records[paper.id];
 }
 function paperTopics(paper) {
@@ -221,6 +247,7 @@ function syncTopSearch(route) {
 function renderRoute() {
   const route = parseRoute(); if (!ROUTE_NAMES[route.name]) return navigate('home', {}, true);
   closeTranslationPopover(); syncTopSearch(route); setActiveNav(route.name);
+  if (route.name === 'settings') { showView('settings'); renderSettingsPage(); window.scrollTo({ top: 0, behavior: 'instant' }); return; }
   if (!state.loaded) return;
   if (route.name !== 'paper') { state.returnHash = null; closeDrawer(false); }
   if (route.name === 'home') { showView('home'); renderHome(); }
@@ -284,6 +311,21 @@ function renderHome() {
   el('home-deadlines').innerHTML = venues.map(venue => `<div class="deadline-card"><div><b>${saved.has(venue.name) ? '★ ' : ''}${escapeHtml(venue.name)}</b><p>${escapeHtml(venue.area === 'architecture' ? '体系结构' : 'AI')} · ${escapeHtml(venue.deadline)}</p></div><button class="small" data-venue-save="${escapeHtml(venue.name)}">${saved.has(venue.name) ? '已关注' : '关注'}</button></div>`).join('');
 }
 
+function renderSettingsPage() {
+  renderProfile();
+  const presetNames = { classic: '经典绿', compact: '紧凑学术', focus: '专注阅读', accessible: '高可访问' };
+  const densityNames = { comfortable: '舒适', standard: '标准', compact: '紧凑' };
+  el('settings-ui-summary').textContent = `${presetNames[uiSettings.preset] || '经典绿'} · ${densityNames[uiSettings.density] || '标准'} · ${Math.round(Number(uiSettings.fontScale || 1) * 100)}%`;
+  el('settings-translation-summary').textContent = translationSettings.enabled ? `已启用 · ${translationSettings.mode === 'online' ? '在线优先' : translationSettings.mode === 'offline' ? '仅离线' : '自动'}` : '已关闭';
+  const activeImports = state.pdfImportQueue.filter(job => ['queued', 'processing'].includes(job.status)).length;
+  el('settings-import-summary').textContent = activeImports ? `${activeImports} 个任务处理中` : `${state.pdfImportQueue.length} 个任务`;
+  el('settings-trash-summary').textContent = `${Object.values(library.records).filter(record => record.trashAt).length} 篇`;
+  estimateStorage().then(storage => {
+    if (!el('settings-storage-summary')) return;
+    el('settings-storage-summary').textContent = storage?.quota ? `${formatFileSize(storage.usage)} / ${formatFileSize(storage.quota)}` : '浏览器未提供配额';
+  }).catch(() => { if (el('settings-storage-summary')) el('settings-storage-summary').textContent = '暂时无法估算'; });
+}
+
 function getPaperFilters(area, route) {
   const memory = readJson(`${FILTER_KEY_PREFIX}${area}`, {});
   return {
@@ -326,7 +368,7 @@ function renderPaperPage(area, route) {
 }
 function paperRow(paper, index) {
   const record = getRecord(paper.id); const info = publicationInfo(record, paper); const checked = state.compare.has(paper.id);
-  return `<article class="paper-row ${isRecordRead(record) ? 'read' : ''}" data-paper-id="${escapeHtml(paper.id)}"><input class="check" type="checkbox" data-action="compare" aria-label="加入对比" ${checked ? 'checked' : ''}><span class="paper-index">${String(index).padStart(2, '0')}</span><div class="paper-main"><button class="paper-title" data-action="open"><h3 data-translatable>${escapeHtml(paper.title)}</h3></button><p data-translatable>${escapeHtml(paper.abstract)}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span>${paper.quality?.tier ? `<span class="tag quality-badge">${escapeHtml(paper.quality.tier)} · ${paper.qualityScore}</span>` : ''}<span class="tag venue-badge">${escapeHtml(`${paper.venueName || paper.venue || paper.source}${paper.venueYear ? ` ${paper.venueYear}` : ''}`)}</span><span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.status === 'published' ? '正式收录' : '预印本')}</span><span class="tag">${escapeHtml(paperDateText(paper))}</span>${record?.note ? '<span class="tag note">有笔记</span>' : ''}${paperTopics(paper).map(topic => `<span class="tag">${escapeHtml(topic)}</span>`).join('')}</div></div><div class="paper-actions"><button data-action="read" class="${isRecordRead(record) ? 'active' : ''}" title="已读" aria-label="切换已读状态">✓</button><button data-action="queue" class="${record?.queueAt ? 'active' : ''}" title="阅读队列" aria-label="切换阅读队列">＋</button><button data-action="save" class="${record?.savedAt ? 'saved' : ''}" title="收藏" aria-label="切换收藏">${record?.savedAt ? '★' : '☆'}</button></div></article>`;
+  return `<article class="paper-row ${isRecordRead(record) ? 'read' : ''}" data-paper-id="${escapeHtml(paper.id)}"><button class="compare-toggle ${checked ? 'active' : ''}" data-action="compare" aria-pressed="${checked}" aria-label="${checked ? '移出' : '加入'}论文对比">对比</button><span class="paper-index">${String(index).padStart(2, '0')}</span><div class="paper-main"><button class="paper-title" data-action="open"><h3 data-translatable>${escapeHtml(paper.title)}</h3></button><p data-translatable>${escapeHtml(paper.abstract)}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span>${paper.quality?.tier ? `<span class="tag quality-badge">${escapeHtml(paper.quality.tier)} · ${paper.qualityScore}</span>` : ''}<span class="tag venue-badge">${escapeHtml(`${paper.venueName || paper.venue || paper.source}${paper.venueYear ? ` ${paper.venueYear}` : ''}`)}</span><span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.status === 'published' ? '正式收录' : '预印本')}</span><span class="tag">${escapeHtml(paperDateText(paper))}</span>${record?.note ? '<span class="tag note">有笔记</span>' : ''}${paperTopics(paper).map(topic => `<span class="tag">${escapeHtml(topic)}</span>`).join('')}</div></div><div class="paper-actions"><button data-action="read" class="${isRecordRead(record) ? 'active' : ''}" title="已读" aria-label="切换已读状态">✓</button><button data-action="queue" class="${record?.queueAt ? 'active' : ''}" title="阅读队列" aria-label="切换阅读队列">＋</button><button data-action="save" class="${record?.savedAt ? 'saved' : ''}" title="收藏" aria-label="切换收藏">${record?.savedAt ? '★' : '☆'}</button></div></article>`;
 }
 function renderPagination(target, page, total, onPage) {
   const node = el(target); if (total <= 1) { node.innerHTML = ''; return; }
@@ -343,23 +385,38 @@ function renderCuratedPage(route) {
   el('curated-count').textContent = `${filtered.length} 个专栏 · ${filtered.reduce((sum, section) => sum + section.papers.length, 0)} 篇精选`;
   el('curated-sections').innerHTML = filtered.map(section => `<section class="curated-section"><div class="curated-section-head"><div class="eyebrow">${escapeHtml(`${section.type} · ${section.year}`)}</div><h2>${escapeHtml(section.title)}</h2><p>${escapeHtml(section.subtitle)}</p><a href="${escapeHtml(safeUrl(section.officialUrl))}" target="_blank" rel="noopener">${escapeHtml(section.source)} ↗</a></div>${section.papers.slice(0, 8).map(paper => `<article class="preview-paper"><button data-open-paper="${escapeHtml(paper.id)}"><h4 data-translatable>${escapeHtml(paper.title)}</h4><p>推荐 ${paper.qualityScore || '—'} · ${escapeHtml(paper.track || paperDateText(paper))}</p></button><button class="small" data-compare="${escapeHtml(paper.id)}">＋</button></article>`).join('')}<div class="card-head"><button class="small" data-curated-venue="${escapeHtml(section.venue)}">只看此专栏</button><span class="mono">${section.papers.length} PAPERS</span></div></section>`).join('') || '<div class="empty">没有符合当前条件的正式收录专栏。</div>';
   const today = shanghaiToday(); el('daily-cadence').textContent = state.curated.daily?.cadence || '';
-  el('daily-schedule').innerHTML = (state.curated.daily?.items || []).map(item => { const paper = getPaper(item.paperId); if (!paper) return ''; const done = Boolean(library.dailyProgress?.[item.date]?.completedAt); return `<div class="schedule-row ${item.date === today ? 'today' : ''}"><span class="mono">${item.date === today ? '今天' : escapeHtml(item.date.slice(5))}${done ? ' · ✓' : ''}</span><div><b>${escapeHtml(paper.title)}</b><p>${escapeHtml(`${paper.venueName || paper.venue || paper.source} · ${item.reason}`)}</p></div><button class="small" data-open-paper="${escapeHtml(paper.id)}">查看</button></div>`; }).join('');
+  el('daily-schedule').innerHTML = (state.curated.daily?.items || []).map(item => { const paper = getPaper(item.paperId); if (!paper) return ''; const done = Boolean(library.dailyProgress?.[item.date]?.completedAt); return `<div class="schedule-row ${item.date === today ? 'today' : ''}"><span class="mono">${item.date === today ? '今天' : escapeHtml(item.date.slice(5))}${done ? ' · ✓' : ''}</span><div><button class="library-title" data-open-paper="${escapeHtml(paper.id)}"><b>${escapeHtml(paper.title)}</b></button><p>${escapeHtml(`${paper.venueName || paper.venue || paper.source} · ${item.reason}`)}</p></div><button class="small" data-open-paper="${escapeHtml(paper.id)}">查看</button></div>`; }).join('');
 }
 
 function toggleRecordField(id, field) {
+  const existed = Boolean(getRecord(id)); const previous = existed ? structuredClone(getRecord(id)) : null;
   const record = ensureRecord(getPaper(id)); if (!record) return;
+  record.trashAt = null;
+  record.archivedAt = null;
   if (field === 'read') {
     const next = !isRecordRead(record);
     setRecordRead(record, next);
-    saveLibrary(); renderCurrentView(); renderDrawerActions();
+    if (!saveLibrary()) { if (previous) library.records[id] = previous; else delete library.records[id]; return; }
+    renderCurrentView(); renderDrawerActions();
     toast(next ? '已标记为已读' : '已取消已读并重置进度');
     return;
   }
   const value = `${field}At`; record[value] = record[value] ? null : new Date().toISOString();
-  saveLibrary(); renderCurrentView(); renderDrawerActions();
+  if (!saveLibrary()) { if (previous) library.records[id] = previous; else delete library.records[id]; return; }
+  renderCurrentView(); renderDrawerActions();
   toast(record[value] ? field === 'saved' ? '已收藏' : field === 'queue' ? '已加入阅读队列' : '已标记为已读' : '已取消');
 }
-function markOpened(id) { const record = ensureRecord(getPaper(id)); if (!record) return; record.lastOpenedAt = new Date().toISOString(); saveLibrary(); }
+function markOpened(id) {
+  const paper = getPaper(id); if (!paper) return;
+  const openedAt = new Date().toISOString();
+  const record = getRecord(id);
+  if (record) record.lastOpenedAt = openedAt;
+  else {
+    library.recent ||= {};
+    library.recent[id] = { paper: snapshotPaper(paper), lastOpenedAt: openedAt };
+  }
+  saveLibrary();
+}
 function renderCurrentView() { const route = parseRoute(); if (route.name === 'paper') return; renderRoute(); }
 
 function renderProfile() {
@@ -377,20 +434,33 @@ function duplicateRecordKey(record) {
 function duplicateRecordIds() {
   const groups = new Map();
   for (const [id, record] of Object.entries(library.records)) {
-    if (!record?.paper) continue; const key = duplicateRecordKey(record); if (!key) continue;
+    if (!isActiveRecord(record)) continue; const key = duplicateRecordKey(record); if (!key) continue;
     if (!groups.has(key)) groups.set(key, []); groups.get(key).push(id);
   }
   return new Set([...groups.values()].filter(ids => ids.length > 1).flat());
 }
 function libraryRecords(tab, collectionId, q, smart = 'unread') {
+  if (tab === 'recent') {
+    const recent = new Map();
+    for (const [id, item] of Object.entries(library.recent || {})) recent.set(id, item);
+    for (const [id, record] of Object.entries(library.records || {})) {
+      if (record?.lastOpenedAt && !record.trashAt) recent.set(id, record);
+    }
+    return [...recent.entries()].filter(([, record]) => {
+      const paper = { ...record.paper, ...(record.metadataOverrides || {}) };
+      return !q || `${paper.title} ${(paper.authors || []).join(' ')} ${paper.venue || ''}`.toLowerCase().includes(q.toLowerCase());
+    }).sort(([, a], [, b]) => new Date(b.lastOpenedAt || 0) - new Date(a.lastOpenedAt || 0));
+  }
   const duplicates = tab === 'duplicates' ? duplicateRecordIds() : null;
-  return Object.entries(library.records).filter(([, record]) => record?.paper).filter(([id, record]) => {
+  return Object.entries(library.records).filter(([, record]) => isLibraryRecord(record)).filter(([id, record]) => {
     const paper = { ...record.paper, ...(record.metadataOverrides || {}) };
     if (q && !`${paper.title} ${(paper.authors || []).join(' ')} ${paper.venue || ''} ${paper.doi || ''} ${record.note} ${(record.tags || []).join(' ')}`.toLowerCase().includes(q.toLowerCase())) return false;
+    if (tab === 'trash') return Boolean(record.trashAt);
+    if (tab === 'archive') return Boolean(record.archivedAt && !record.trashAt);
+    if (record.trashAt || record.archivedAt) return false;
     if (tab === 'all') return true;
     if (tab === 'saved') return Boolean(record.savedAt);
     if (tab === 'queue') return Boolean(record.queueAt);
-    if (tab === 'recent') return Boolean(record.lastOpenedAt);
     if (tab === 'notes') return recordHasNotes(record);
     if (tab === 'published') return Boolean(record.savedAt && publicationInfo(record, record.paper).status === 'published');
     if (tab === 'collections') return collectionId && collectionId !== 'all' ? record.collections?.includes(collectionId) : Boolean(record.collections?.length);
@@ -408,25 +478,45 @@ function libraryRecords(tab, collectionId, q, smart = 'unread') {
   }).sort(([, a], [, b]) => new Date(b.queueAt || b.savedAt || b.lastOpenedAt || b.readAt || 0) - new Date(a.queueAt || a.savedAt || a.lastOpenedAt || a.readAt || 0));
 }
 function renderLibraryPage(route) {
-  renderProfile(); const tab = route.parts[1] || 'saved'; const q = route.query.q || ''; const collectionId = route.query.collection || 'all'; const smart = route.query.smart || 'unread'; const page = Math.max(1, Number(route.query.page || 1));
+  renderProfile(); const tab = route.parts[1] || 'all'; const q = route.query.q || ''; const collectionId = route.query.collection || 'all'; const smart = route.query.smart || 'unread'; const page = Math.max(1, Number(route.query.page || 1));
   const stats = libraryStats(); for (const [name, value] of Object.entries(stats)) el(`stat-${name}`).textContent = value;
   document.querySelectorAll('#library-tabs [data-tab]').forEach(button => button.classList.toggle('active', button.dataset.tab === tab));
   el('library-tab-select').value = tab;
-  el('library-batchbar').classList.toggle('hidden', ['vocabulary', 'translations'].includes(tab));
   el('collection-tools').classList.toggle('hidden', tab !== 'collections'); renderCollectionOptions(collectionId);
   el('smart-tools').classList.toggle('hidden', tab !== 'smart'); el('smart-filter').value = smart;
   if (tab === 'smart' && route.query.pdfq) el('library-pdf-search').value = route.query.pdfq;
   el('merge-duplicates').classList.toggle('hidden', tab !== 'duplicates');
-  if (tab === 'vocabulary') return renderVocabularyPage(route);
-  if (tab === 'translations') return renderTranslationHistoryPage(route);
+  if (['vocabulary', 'translations'].includes(tab)) {
+    state.batch.clear(); state.visibleLibraryIds = []; updateBatchCount();
+    if (tab === 'vocabulary') return renderVocabularyPage(route);
+    return renderTranslationHistoryPage(route);
+  }
   const records = libraryRecords(tab, collectionId, q, smart); const total = Math.max(1, Math.ceil(records.length / 10)); const safePage = Math.min(page, total); const pageRecords = records.slice((safePage - 1) * 10, safePage * 10);
-  state.batch.clear(); updateBatchCount(); el('library-select-all').checked = false;
+  const batchContext = `library/${tab}`;
+  if (state.batchContext !== batchContext) {
+    state.batch.clear();
+    state.batchContext = batchContext;
+  }
+  state.batch = new Set([...state.batch].filter(id => library.records[id]?.paper));
+  state.visibleLibraryIds = pageRecords.map(([id]) => id);
   el('library-list').innerHTML = pageRecords.length ? pageRecords.map(([id, record]) => libraryRow(id, record)).join('') : '<div class="empty">当前分类还没有论文。</div>';
+  updateBatchCount();
   renderPagination('library-pagination', safePage, total, next => navigate(`library/${tab}`, { ...route.query, page: next }));
 }
 function libraryRow(id, record) {
   const paper = getPaper(id) || record.paper; const info = publicationInfo(record, paper); const names = (record.collections || []).map(collectionId => library.collections[collectionId]?.name).filter(Boolean);
-  return `<article class="library-row" data-library-id="${escapeHtml(id)}"><input class="check" type="checkbox" data-library-select aria-label="选择论文"><div><h3 data-translatable>${escapeHtml(paper.title)}</h3><p data-translatable>${escapeHtml(record.note || paper.abstract || '')}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span><span class="tag">进度 ${record.progress || 0}%</span>${record.pdfAttachment ? `<span class="tag published">本地 PDF · ${record.pdfAttachment.pageCount} 页${(record.pdfAttachments?.length || 0) > 1 ? ` · ${record.pdfAttachments.length} 个版本` : ''}</span>` : ''}${record.pdfAttachment?.annotationCount ? `<span class="tag note">${record.pdfAttachment.annotationCount} 条 PDF 标注</span>` : ''}${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${(record.tags || []).slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}${names.map(name => `<span class="tag"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="paper-actions">${record.pdfAttachment ? '<button data-library-action="pdf">阅读 PDF</button>' : ''}<button data-library-action="compare">对比</button><button data-library-action="open">查看</button><button data-library-action="save" class="${record.savedAt ? 'saved' : ''}" aria-label="切换收藏">${record.savedAt ? '★' : '☆'}</button></div></article>`;
+  const managed = Boolean(library.records[id]); const selected = managed && state.batch.has(id); const trashed = Boolean(record.trashAt); const archived = Boolean(record.archivedAt && !trashed);
+  const selectControl = managed
+    ? `<input class="check" type="checkbox" data-library-select aria-label="选择论文：${escapeHtml(paper.title)}" ${selected ? 'checked' : ''}>`
+    : '<span class="recent-marker" title="仅浏览记录">↗</span>';
+  const lifecycleActions = !managed
+    ? '<button role="menuitem" data-library-action="save">收藏到文献库</button><button role="menuitem" data-library-action="queue">加入阅读队列</button>'
+    : trashed
+    ? '<button role="menuitem" data-library-action="restore">恢复到文献库</button><button class="danger" role="menuitem" data-library-action="permanent-delete">永久删除</button>'
+    : archived
+      ? '<button role="menuitem" data-library-action="restore">取消归档</button><button class="danger" role="menuitem" data-library-action="trash">移至回收站</button>'
+      : '<button role="menuitem" data-library-action="category">加入分类</button><button role="menuitem" data-library-action="archive">归档</button><button class="danger" role="menuitem" data-library-action="trash">移至回收站</button>';
+  return `<article class="library-row ${selected ? 'selected' : ''}" data-library-id="${escapeHtml(id)}">${selectControl}<div class="library-main"><button class="library-title" data-library-action="open"><h3 data-translatable>${escapeHtml(paper.title)}</h3></button><p data-translatable>${escapeHtml(record.note || paper.abstract || '')}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span>${!managed ? '<span class="tag">仅最近浏览</span>' : ''}${record.progress !== undefined ? `<span class="tag">进度 ${record.progress || 0}%</span>` : ''}${record.pdfAttachment ? `<span class="tag published">本地 PDF · ${record.pdfAttachment.pageCount} 页${(record.pdfAttachments?.length || 0) > 1 ? ` · ${record.pdfAttachments.length} 个版本` : ''}</span>` : ''}${record.pdfAttachment?.annotationCount ? `<span class="tag note">${record.pdfAttachment.annotationCount} 条 PDF 标注</span>` : ''}${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${archived ? '<span class="tag">已归档</span>' : ''}${trashed ? `<span class="tag note">回收站 · ${escapeHtml(dateText(record.trashAt))}</span>` : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${(record.tags || []).slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}${names.map(name => `<span class="tag collection-chip"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="library-row-actions">${record.pdfAttachment ? '<button class="small" data-library-action="pdf">阅读 PDF</button>' : ''}<button class="small" data-library-action="open">查看</button><details class="row-menu"><summary aria-label="更多文献操作">•••</summary><div role="menu"><button role="menuitem" data-library-action="compare">加入对比</button>${managed ? `<button role="menuitem" data-library-action="read">${isRecordRead(record) ? '标记未读' : '标记已读'}</button><button role="menuitem" data-library-action="queue">${record.queueAt ? '移出队列' : '加入队列'}</button>` : ''}${lifecycleActions}</div></details></div></article>`;
 }
 function renderVocabularyPage(route) {
   const q = (route.query.q || '').trim().toLowerCase(); const page = Math.max(1, Number(route.query.page || 1));
@@ -456,20 +546,28 @@ function exportVocabulary() {
   downloadText('paperscope-vocabulary.csv', `\uFEFF${csv}`, 'text/csv;charset=utf-8');
 }
 function renderCollectionOptions(selected) {
+  library.collections = validateCollectionTree(library.collections);
   const entries = Object.entries(library.collections);
+  const counts = new Map(entries.map(([id]) => [id, Object.values(library.records).filter(record => isActiveRecord(record) && record.collections?.includes(id)).length]));
   const children = new Map();
   for (const entry of entries) {
     const parent = entry[1].parentId && library.collections[entry[1].parentId] ? entry[1].parentId : '';
     if (!children.has(parent)) children.set(parent, []); children.get(parent).push(entry);
   }
-  for (const values of children.values()) values.sort((a, b) => a[1].name.localeCompare(b[1].name, 'zh-CN'));
-  const ordered = []; const visit = (parentId, depth) => {
-    for (const [id, collection] of children.get(parentId) || []) { ordered.push([id, collection, depth]); visit(id, depth + 1); }
+  for (const values of children.values()) values.sort((a, b) => Number(a[1].order || 0) - Number(b[1].order || 0) || a[1].name.localeCompare(b[1].name, 'zh-CN'));
+  const ordered = []; const visited = new Set(); const visit = (parentId, depth) => {
+    for (const [id, collection] of children.get(parentId) || []) {
+      if (visited.has(id)) continue;
+      visited.add(id); ordered.push([id, collection, depth]); visit(id, depth + 1);
+    }
   }; visit('', 0);
-  const options = ordered.map(([id, collection, depth]) => `<option value="${escapeHtml(id)}">${'　'.repeat(depth)}${depth ? '↳ ' : ''}${escapeHtml(collection.name)}</option>`).join('');
-  if (selected !== undefined) { el('collection-filter').innerHTML = `<option value="all">全部专题</option>${options}`; el('collection-filter').value = selected || 'all'; }
-  el('paper-collection').innerHTML = `<option value="">选择专题收藏</option>${options}`;
-  el('collection-parent').innerHTML = `<option value="">顶层专题</option>${options}`;
+  for (const [id, collection] of entries) if (!visited.has(id)) ordered.push([id, collection, 0]);
+  const options = ordered.map(([id, collection, depth]) => `<option value="${escapeHtml(id)}">${'　'.repeat(depth)}${depth ? '↳ ' : ''}${escapeHtml(collection.name)}（${counts.get(id) || 0}）</option>`).join('');
+  if (selected !== undefined) { el('collection-filter').innerHTML = `<option value="all">全部分类</option>${options}`; el('collection-filter').value = selected || 'all'; }
+  el('paper-collection').innerHTML = `<option value="">选择分类</option>${options}`;
+  el('collection-parent').innerHTML = `<option value="">顶层分类</option>${options}`;
+  if (el('batch-collection-select')) el('batch-collection-select').innerHTML = `<option value="">选择分类…</option>${options}`;
+  if (el('pdf-import-collection')) el('pdf-import-collection').innerHTML = `<option value="">导入后放入“待整理”</option>${options}`;
 }
 async function searchLocalPdfLibrary() {
   const query = el('library-pdf-search').value.trim().toLowerCase(); if (query.length < 2) return toast('请输入至少 2 个字符');
@@ -508,7 +606,94 @@ async function mergeSelectedDuplicates() {
   }
   state.batch = new Set([targetId]); saveLibrary(); renderRoute(); toast(`已合并 ${ids.length} 条重复记录`);
 }
-function updateBatchCount() { el('batch-count').textContent = `${state.batch.size} 项已选`; }
+function selectedRecordIds() {
+  return [...state.batch].filter(id => library.records[id]?.paper);
+}
+function updateBatchCount() {
+  const bar = el('library-batchbar'); if (!bar) return;
+  const route = parseRoute(); const tab = route.parts[1] || 'all'; const ids = selectedRecordIds();
+  el('batch-count').textContent = `${ids.length} 项已选`;
+  bar.classList.toggle('hidden', !ids.length || ['vocabulary', 'translations'].includes(tab));
+  const visible = state.visibleLibraryIds || [];
+  const selectedVisible = visible.filter(id => state.batch.has(id)).length;
+  el('library-select-all').checked = Boolean(visible.length && selectedVisible === visible.length);
+  el('library-select-all').indeterminate = Boolean(selectedVisible && selectedVisible < visible.length);
+  bar.querySelectorAll('[data-batch-mode="standard"]').forEach(node => node.classList.toggle('hidden', ['archive', 'trash'].includes(tab)));
+  bar.querySelectorAll('[data-batch-mode="restore"]').forEach(node => node.classList.toggle('hidden', !['archive', 'trash'].includes(tab)));
+  bar.querySelectorAll('[data-batch-mode="archive"]').forEach(node => node.classList.toggle('hidden', tab !== 'archive'));
+  bar.querySelectorAll('[data-batch-mode="trash"]').forEach(node => node.classList.toggle('hidden', tab !== 'trash'));
+  document.querySelectorAll('[data-library-id]').forEach(row => row.classList.toggle('selected', state.batch.has(row.dataset.libraryId)));
+}
+function runBatchAction(action, message, payload = {}) {
+  const ids = selectedRecordIds(); if (!ids.length) return toast('请先选择文献');
+  const snapshots = new Map(ids.map(id => [id, structuredClone(library.records[id])]));
+  const changed = applyBatchAction(library, ids, action, payload);
+  if (!changed) return toast('当前选择没有可执行的操作');
+  if (!saveLibrary()) {
+    for (const [id, record] of snapshots) library.records[id] = record;
+    return;
+  }
+  renderRoute();
+  toast(`${message} · ${changed} 篇`);
+}
+function moveRecordsToTrash(ids = selectedRecordIds()) {
+  const valid = ids.filter(id => library.records[id]?.paper && !library.records[id].trashAt);
+  if (!valid.length) return toast('没有可移至回收站的文献');
+  const previous = new Map(valid.map(id => [id, {
+    trashAt: library.records[id].trashAt || null,
+    archivedAt: library.records[id].archivedAt || null
+  }]));
+  applyBatchAction(library, valid, 'trash');
+  if (!saveLibrary()) {
+    for (const [id, lifecycle] of previous) Object.assign(library.records[id], lifecycle);
+    return;
+  }
+  state.batch.clear();
+  renderRoute();
+  toast(`已移至回收站 · ${valid.length} 篇`, {
+    actionLabel: '撤销',
+    duration: 8000,
+    onAction: () => {
+      for (const [id, lifecycle] of previous) if (library.records[id]) Object.assign(library.records[id], lifecycle);
+      saveLibrary(); renderRoute(); toast('已撤销删除');
+    }
+  });
+}
+function restoreRecords(ids = selectedRecordIds()) {
+  const valid = ids.filter(id => library.records[id]?.paper && (library.records[id].trashAt || library.records[id].archivedAt));
+  if (!valid.length) return toast('没有可恢复的文献');
+  const snapshots = new Map(valid.map(id => [id, structuredClone(library.records[id])]));
+  applyBatchAction(library, valid, 'restore');
+  if (!saveLibrary()) {
+    for (const [id, record] of snapshots) library.records[id] = record;
+    return;
+  }
+  state.batch.clear(); renderRoute(); toast(`已恢复 ${valid.length} 篇文献`);
+}
+async function permanentlyDeleteRecords(ids = selectedRecordIds()) {
+  const valid = ids.filter(id => library.records[id]?.trashAt);
+  if (!valid.length) return toast('永久删除只能在回收站中执行');
+  const attachmentCount = valid.reduce((sum, id) => sum + Math.max(Number(Boolean(library.records[id].pdfAttachment)), library.records[id].pdfAttachments?.length || 0), 0);
+  if (!confirm(`永久删除 ${valid.length} 篇文献？这会同时清除 ${attachmentCount} 个本地 PDF 及其文本、批注，且无法撤销。`)) return;
+  try {
+    for (const id of valid) await deleteAllPdfAttachments(id);
+    for (const item of Object.values(library.vocabulary || {})) {
+      if (valid.includes(item.paperId)) { item.paperTitle ||= library.records[item.paperId]?.paper?.title || ''; item.paperId = null; }
+    }
+    translationHistory = translationHistory.map(item => valid.includes(item.paperId) ? { ...item, paperId: null } : item);
+    try { localStorage.setItem(TRANSLATION_HISTORY_KEY, JSON.stringify(translationHistory)); } catch {}
+    for (const id of valid) {
+      delete library.records[id];
+      delete library.recent?.[id];
+      state.batch.delete(id);
+    }
+    if (!saveLibrary()) throw new Error('文献索引未能持久化，请立即导出备份');
+    renderRoute(); toast(`已永久删除 ${valid.length} 篇文献`);
+  } catch (error) {
+    await repairPdfLibrary({ notify: false }).catch(() => {});
+    renderRoute(); toast(`永久删除未完成：${error.message}`);
+  }
+}
 
 function renderNewsPage(route) {
   const q = route.query.q || ''; const source = route.query.source || 'all'; const size = Number(route.query.size) === 18 ? 18 : 9; const page = Math.max(1, Number(route.query.page || 1));
@@ -671,7 +856,7 @@ async function exportCompleteBackup() {
 async function importLibraryFile(file) {
   try {
     const value = JSON.parse(await file.text());
-    if (![2, 3].includes(value.version) || !value.records || typeof value.records !== 'object') throw new Error('不是有效的 PaperScope 备份');
+    if (![2, 3, 4].includes(value.version) || !value.records || typeof value.records !== 'object') throw new Error('不是有效的 PaperScope 备份');
     if (!confirm(`将合并导入 ${Object.keys(value.records).length} 条记录。当前文献和本机 PDF 不会被整体覆盖，是否继续？`)) return;
     const importedRecords = Object.fromEntries(Object.entries(value.records).filter(([, record]) => record?.paper).map(([id, incoming]) => {
       const existing = library.records[id] || {};
@@ -698,6 +883,7 @@ async function importLibraryFile(file) {
       dailyProgress: { ...library.dailyProgress, ...(value.dailyProgress || {}) },
       vocabulary: { ...library.vocabulary, ...(value.vocabulary || {}) }
     };
+    library = migrateLibraryData(library, defaultLibrary);
     if (!saveLibrary()) throw new Error('导入内容无法写入浏览器存储');
     await repairPdfLibrary({ notify: false });
     renderRoute(); toast('合并导入完成');
@@ -939,7 +1125,7 @@ function localPdfArea(metadata) {
   const text = `${metadata.title} ${metadata.excerpt}`.toLowerCase();
   return /architecture|processor|microarchitecture|accelerator|cache|memory system|interconnect|chiplet|risc-v|hardware/.test(text) ? 'architecture' : 'ai';
 }
-async function importStandalonePdf(file, { jobId = null, open = true, fingerprint = null } = {}) {
+async function importStandalonePdf(file, { jobId = null, open = true, fingerprint = null, collectionId = null } = {}) {
   const id = `local:${crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36)}`;
   try {
     if (!jobId) toast('正在解析本地 PDF…');
@@ -952,6 +1138,7 @@ async function importStandalonePdf(file, { jobId = null, open = true, fingerprin
       const record = ensureRecord(match.paper);
       record.savedAt ||= new Date().toISOString();
       record.lastOpenedAt = new Date().toISOString();
+      if (library.collections[collectionId]) record.collections = [...new Set([...(record.collections || []), collectionId])];
       record.pdfAttachment = pdfAttachmentMeta(moved);
       record.pdfAttachments = [record.pdfAttachment];
       if (!saveLibrary()) throw new Error('匹配成功，但文献索引保存失败');
@@ -967,6 +1154,7 @@ async function importStandalonePdf(file, { jobId = null, open = true, fingerprin
     const record = ensureRecord(paper);
     record.savedAt = new Date().toISOString();
     record.lastOpenedAt = record.savedAt;
+    if (library.collections[collectionId]) record.collections = [...new Set([...(record.collections || []), collectionId])];
     record.pdfAttachment = pdfAttachmentMeta(stored);
     record.pdfAttachments = [record.pdfAttachment];
     if (!saveLibrary()) throw new Error('PDF 已保存，但文献记录未能持久化');
@@ -1005,6 +1193,8 @@ function renderPdfImportQueue() {
     </article>`).join('') : '<div class="empty">拖入 PDF、选择多个文件或扫描一个文件夹。</div>';
   const active = state.pdfImportQueue.filter(job => ['queued', 'processing'].includes(job.status)).length;
   el('pdf-import-summary').textContent = active ? `${active} 个任务待处理` : state.pdfImportQueue.length ? '队列已处理完毕' : '尚未添加文件';
+  if (el('mobile-import-count')) el('mobile-import-count').textContent = String(active);
+  if (el('settings-import-summary')) el('settings-import-summary').textContent = active ? `${active} 个任务处理中` : `${state.pdfImportQueue.length} 个任务`;
 }
 function openPdfImportCenter() {
   el('pdf-import-modal').classList.add('open');
@@ -1019,7 +1209,7 @@ async function queuePdfFiles(files, { targetPaperId = null } = {}) {
     const id = `import:${crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random()}`}`;
     const job = {
       id, file, blob: file, fileName: file.name, size: file.size, type: file.type || 'application/pdf',
-      lastModified: file.lastModified || 0, targetPaperId, status: 'queued', progress: 0, message: '等待解析'
+      lastModified: file.lastModified || 0, targetPaperId, collectionId: el('pdf-import-collection')?.value || null, status: 'queued', progress: 0, message: '等待解析'
     };
     state.pdfImportQueue.push(job);
     await savePdfImportJob({ ...job, file: undefined }).catch(() => {});
@@ -1054,10 +1244,11 @@ async function processPdfImportQueue() {
           record.pdfAttachment = pdfAttachmentMeta(stored, record.pdfAttachment || {});
           record.pdfAttachments = [record.pdfAttachment, ...(record.pdfAttachments || []).filter(item => item.attachmentId !== record.pdfAttachment.attachmentId)];
           record.savedAt ||= new Date().toISOString();
+          if (library.collections[job.collectionId]) record.collections = [...new Set([...(record.collections || []), job.collectionId])];
           if (!saveLibrary()) throw new Error('文献索引保存失败');
           job.status = 'success'; job.progress = 100; job.message = '已附加到论文';
         } else {
-          const result = await importStandalonePdf(job.file, { jobId: job.id, open: false, fingerprint });
+          const result = await importStandalonePdf(job.file, { jobId: job.id, open: false, fingerprint, collectionId: job.collectionId });
           job.status = 'success'; job.progress = 100;
           job.message = result.matched ? `已自动关联：${result.reason}` : '已创建本地论文';
         }
@@ -2305,7 +2496,10 @@ function renderCompare() {
 
 const COMMAND_PAGES = [
   { label: '今日概览', hint: 'Home', route: 'home' }, { label: 'AI 论文', hint: 'Algorithms & Models', route: 'ai' }, { label: '体系结构论文', hint: 'Hardware & Systems', route: 'architecture' },
-  { label: '顶会期刊精选', hint: 'Quality-first & Daily', route: 'curated' }, { label: '个人文献库', hint: 'Saved & Notes', route: 'library/saved' }, { label: '研究资讯', hint: 'Official News', route: 'news' }, { label: '会议与期刊', hint: 'Venues', route: 'venues' }
+  { label: '顶会期刊精选', hint: 'Quality-first & Daily', route: 'curated' }, { label: '个人文献库', hint: 'Library', route: 'library/all' },
+  { label: '待整理文献', hint: 'Inbox', route: 'library/unfiled' }, { label: '文献分类', hint: 'Collections', route: 'library/collections' }, { label: '阅读队列', hint: 'Queue', route: 'library/queue' },
+  { label: '归档文献', hint: 'Archive', route: 'library/archive' }, { label: '回收站', hint: 'Trash', route: 'library/trash' },
+  { label: '研究资讯', hint: 'Official News', route: 'news' }, { label: '会议与期刊', hint: 'Venues', route: 'venues' }, { label: '设置与数据', hint: 'Settings', route: 'settings' }
 ];
 function renderCommands(query = '') {
   const normalized = query.toLowerCase(); const pages = COMMAND_PAGES.filter(item => !normalized || `${item.label} ${item.hint}`.toLowerCase().includes(normalized)); const papers = normalized ? allPapers().filter(paper => `${paper.title} ${(paper.authors || []).join(' ')}`.toLowerCase().includes(normalized)).slice(0, 8) : [];
@@ -2334,7 +2528,17 @@ function migrateLegacySaved() {
   for (const id of ids) { const paper = getPaper(id); if (paper) ensureRecord(paper).savedAt ||= new Date().toISOString(); }
   localStorage.removeItem(LEGACY_SAVED_KEY); saveLibrary();
 }
-function syncLibraryPapers() { for (const paper of allPapers()) { const record = getRecord(paper.id); if (record) { record.paper = snapshotPaper(paper); if (paper.publication?.status === 'published') record.publication = paper.publication; } } saveLibrary(); }
+function syncLibraryPapers() {
+  for (const paper of allPapers()) {
+    const record = getRecord(paper.id);
+    if (record) {
+      record.paper = snapshotPaper(paper);
+      if (paper.publication?.status === 'published') record.publication = paper.publication;
+    }
+    if (library.recent?.[paper.id]) library.recent[paper.id].paper = snapshotPaper(paper);
+  }
+  saveLibrary();
+}
 async function loadData(force = false) {
   try {
     const suffix = force ? `?v=${Date.now()}` : ''; const get = async path => { const response = await fetch(`${path}${suffix}`, { cache: force ? 'reload' : 'default' }); if (!response.ok) throw new Error(`${path} 加载失败`); return response.json(); };
@@ -2375,6 +2579,7 @@ async function registerAppServiceWorker() {
 function saveTranslationSettings() {
   try { localStorage.setItem(TRANSLATION_SETTINGS_KEY, JSON.stringify(translationSettings)); } catch {}
   applyTranslationSettings();
+  if (el('settings-translation-summary')) el('settings-translation-summary').textContent = translationSettings.enabled ? `已启用 · ${translationSettings.mode === 'online' ? '在线优先' : translationSettings.mode === 'offline' ? '仅离线' : '自动'}` : '已关闭';
 }
 function openTranslationSettings() {
   applyTranslationSettings();
@@ -2957,7 +3162,7 @@ async function translatePaperAbstract() {
 document.addEventListener('click', event => {
   const selectedText = window.getSelection()?.toString().trim();
   if (selectedText && event.target.closest('[data-open-paper],[data-action="open"],a.news-card')) return;
-  const routeButton = event.target.closest('[data-route]'); if (routeButton) { el('mobile-more-menu').classList.remove('open'); el('mobile-more').setAttribute('aria-expanded', 'false'); return navigate(routeButton.dataset.route); }
+  const routeButton = event.target.closest('[data-route]'); if (routeButton) { closeMobileMore(); return navigate(routeButton.dataset.route); }
   const open = event.target.closest('[data-open-paper]'); if (open) return openPaperRoute(open.dataset.openPaper);
   const compare = event.target.closest('[data-compare]'); if (compare) return toggleCompare(compare.dataset.compare);
   const venueSave = event.target.closest('[data-venue-save]'); if (venueSave) return toggleVenueSave(venueSave.dataset.venueSave);
@@ -3047,24 +3252,90 @@ el('library-list').addEventListener('click', event => {
     return;
   }
   const row = event.target.closest('[data-library-id]'); if (!row) return; const id = row.dataset.libraryId; const action = event.target.closest('[data-library-action]')?.dataset.libraryAction;
-  if (action === 'open') openPaperRoute(id); else if (action === 'pdf') openPdfReader(id); else if (action === 'save') toggleRecordField(id, 'saved'); else if (action === 'compare') toggleCompare(id);
+  if (action === 'open') openPaperRoute(id);
+  else if (action === 'pdf') openPdfReader(id);
+  else if (action === 'save') toggleRecordField(id, 'saved');
+  else if (action === 'compare') toggleCompare(id);
+  else if (action === 'read') toggleRecordField(id, 'read');
+  else if (action === 'queue') toggleRecordField(id, 'queue');
+  else if (action === 'archive') { state.batch = new Set([id]); runBatchAction('archive', '已归档'); }
+  else if (action === 'trash') moveRecordsToTrash([id]);
+  else if (action === 'restore') restoreRecords([id]);
+  else if (action === 'permanent-delete') permanentlyDeleteRecords([id]);
+  else if (action === 'category') {
+    state.batch = new Set([id]); updateBatchCount(); el('batch-collection-select').focus(); toast('请选择分类后点击“加入”');
+  }
 });
-el('library-list').addEventListener('change', event => { if (!event.target.matches('[data-library-select]')) return; const id = event.target.closest('[data-library-id]').dataset.libraryId; event.target.checked ? state.batch.add(id) : state.batch.delete(id); updateBatchCount(); });
+el('library-list').addEventListener('change', event => {
+  if (!event.target.matches('[data-library-select]')) return;
+  const row = event.target.closest('[data-library-id]'); const id = row.dataset.libraryId;
+  event.target.checked ? state.batch.add(id) : state.batch.delete(id);
+  row.classList.toggle('selected', event.target.checked);
+  updateBatchCount();
+});
 el('library-select-all').addEventListener('change', event => { document.querySelectorAll('[data-library-select]').forEach(input => { input.checked = event.target.checked; const id = input.closest('[data-library-id]').dataset.libraryId; event.target.checked ? state.batch.add(id) : state.batch.delete(id); }); updateBatchCount(); });
-el('batch-read').addEventListener('click', () => { for (const id of state.batch) setRecordRead(ensureRecord(getPaper(id)), true); saveLibrary(); renderRoute(); toast('已批量标记为已读'); });
-el('batch-queue').addEventListener('click', () => { for (const id of state.batch) ensureRecord(getPaper(id)).queueAt ||= new Date().toISOString(); saveLibrary(); renderRoute(); toast('已加入阅读队列'); });
+el('batch-clear').addEventListener('click', () => { state.batch.clear(); document.querySelectorAll('[data-library-select]').forEach(input => { input.checked = false; }); updateBatchCount(); });
+el('batch-read').addEventListener('click', () => runBatchAction('read', '已标记为已读'));
+el('batch-unread').addEventListener('click', () => runBatchAction('unread', '已标记为未读'));
+el('batch-queue').addEventListener('click', () => runBatchAction('queue', '已加入阅读队列'));
+el('batch-unqueue').addEventListener('click', () => runBatchAction('unqueue', '已移出阅读队列'));
+el('batch-archive').addEventListener('click', () => runBatchAction('archive', '已归档'));
+el('batch-trash').addEventListener('click', () => moveRecordsToTrash());
+el('batch-trash-archived').addEventListener('click', () => moveRecordsToTrash());
+el('batch-restore').addEventListener('click', () => restoreRecords());
+el('batch-delete-permanent').addEventListener('click', () => permanentlyDeleteRecords());
+el('batch-collection-add').addEventListener('click', () => {
+  const collectionId = el('batch-collection-select').value;
+  if (!library.collections[collectionId]) return toast('请先选择分类');
+  runBatchAction('collection-add', `已加入“${library.collections[collectionId].name}”`, { collectionId });
+});
+el('batch-collection-remove').addEventListener('click', () => {
+  const collectionId = el('batch-collection-select').value;
+  if (!library.collections[collectionId]) return toast('请先选择分类');
+  runBatchAction('collection-remove', `已移出“${library.collections[collectionId].name}”`, { collectionId });
+});
 el('batch-citations').addEventListener('click', () => { if (!state.batch.size) return toast('请先选择论文'); downloadText('paperscope-citations.bib', [...state.batch].map(id => bibtexFor(getPaper(id))).join('\n\n')); });
 el('merge-duplicates').addEventListener('click', mergeSelectedDuplicates);
 el('check-publications').addEventListener('click', async () => { const ids = state.batch.size ? [...state.batch] : Object.entries(library.records).filter(([, record]) => record.savedAt).map(([id]) => id).slice(0, 30); if (!ids.length) return toast('请先收藏或选择论文'); const button = el('check-publications'); button.disabled = true; for (let index = 0; index < ids.length; index += 1) { button.textContent = `${index + 1}/${ids.length}`; await checkPublication(ids[index], true); if (index < ids.length - 1) await new Promise(resolve => setTimeout(resolve, 280)); } button.disabled = false; button.textContent = '检查中刊状态'; renderRoute(); toast('发表状态检查完成'); });
 el('collection-filter').addEventListener('change', event => { const route = parseRoute(); navigate('library/collections', { ...route.query, collection: event.target.value, page: 1 }); });
-el('create-collection').addEventListener('click', () => { const name = el('new-collection-name').value.trim(); if (!name) return toast('请输入专题名称'); const id = `${slug(name)}-${Date.now().toString(36)}`; library.collections[id] = { name, parentId: el('collection-parent').value || null, createdAt: new Date().toISOString() }; saveLibrary(); el('new-collection-name').value = ''; renderRoute(); toast('专题已创建'); });
-el('rename-collection').addEventListener('click', () => { const id = el('collection-filter').value; if (!library.collections[id]) return toast('请先选择一个专题'); const name = prompt('新的专题名称：', library.collections[id].name); if (!name?.trim()) return; library.collections[id].name = name.trim(); saveLibrary(); renderRoute(); toast('专题已重命名'); });
-el('delete-collection').addEventListener('click', () => { const id = el('collection-filter').value; if (!library.collections[id]) return toast('请先选择一个专题'); if (!confirm(`删除专题“${library.collections[id].name}”？论文不会被删除。`)) return; for (const record of Object.values(library.records)) record.collections = (record.collections || []).filter(value => value !== id); for (const collection of Object.values(library.collections)) if (collection.parentId === id) collection.parentId = null; delete library.collections[id]; saveLibrary(); navigate('library/collections'); toast('专题已删除'); });
+el('create-collection').addEventListener('click', () => {
+  const name = el('new-collection-name').value.trim(); const parentId = el('collection-parent').value || null;
+  if (!name) return toast('请输入分类名称');
+  if (Object.values(library.collections).some(collection => collection.parentId === parentId && collection.name.toLocaleLowerCase() === name.toLocaleLowerCase())) return toast('同级分类不能重名');
+  const id = `${slug(name)}-${Date.now().toString(36)}`;
+  library.collections[id] = {
+    name, parentId, color: el('collection-color')?.value || '#116347', icon: 'folder',
+    description: el('collection-description')?.value.trim() || '', order: Object.keys(library.collections).length,
+    createdAt: new Date().toISOString()
+  };
+  library.collections = validateCollectionTree(library.collections);
+  saveLibrary(); el('new-collection-name').value = ''; if (el('collection-description')) el('collection-description').value = '';
+  renderRoute(); toast('分类已创建');
+});
+el('rename-collection').addEventListener('click', () => {
+  const id = el('collection-filter').value; const current = library.collections[id]; if (!current) return toast('请先选择一个分类');
+  const name = prompt('新的分类名称：', current.name); if (!name?.trim()) return;
+  const normalized = name.trim().toLocaleLowerCase();
+  if (Object.entries(library.collections).some(([otherId, collection]) => otherId !== id && collection.parentId === current.parentId && collection.name.toLocaleLowerCase() === normalized)) return toast('同级分类不能重名');
+  current.name = name.trim(); saveLibrary(); renderRoute(); toast('分类已重命名');
+});
+el('delete-collection').addEventListener('click', () => {
+  const id = el('collection-filter').value; const current = library.collections[id]; if (!current) return toast('请先选择一个分类');
+  const children = Object.values(library.collections).filter(collection => collection.parentId === id).length;
+  if (!confirm(`删除分类“${current.name}”？${children ? `其 ${children} 个子分类将提升到顶层；` : ''}文献本身不会被删除。`)) return;
+  for (const record of Object.values(library.records)) record.collections = (record.collections || []).filter(value => value !== id);
+  for (const collection of Object.values(library.collections)) if (collection.parentId === id) collection.parentId = null;
+  delete library.collections[id]; saveLibrary(); navigate('library/collections'); toast('分类已删除');
+});
 el('smart-filter').addEventListener('change', event => navigate('library/smart', { smart: event.target.value, page: 1 }));
 el('library-pdf-search-button').addEventListener('click', searchLocalPdfLibrary);
 el('library-pdf-search').addEventListener('keydown', event => { if (event.key === 'Enter') searchLocalPdfLibrary(); });
 el('export-vocabulary').addEventListener('click', exportVocabulary); el('export-library').addEventListener('click', exportLibrary); el('export-full-backup').addEventListener('click', exportCompleteBackup); el('repair-pdf-library').addEventListener('click', () => repairPdfLibrary()); el('import-library').addEventListener('click', () => el('import-file').click()); el('import-file').addEventListener('change', event => { const [file] = event.target.files; if (file) importLibraryFile(file); event.target.value = ''; });
 el('import-local-pdf').addEventListener('click', openPdfImportCenter);
+el('settings-import-pdf').addEventListener('click', openPdfImportCenter);
+el('library-new-collection').addEventListener('click', () => { navigate('library/collections'); setTimeout(() => el('new-collection-name').focus(), 80); });
+el('empty-trash').addEventListener('click', () => permanentlyDeleteRecords(Object.entries(library.records).filter(([, record]) => record.trashAt).map(([id]) => id)));
+el('settings-profile').addEventListener('click', () => el('profile-modal').classList.add('open'));
 el('import-pdf-directory').addEventListener('click', choosePdfDirectory);
 el('pdf-import-choose').addEventListener('click', () => el('local-pdf-file').click());
 el('pdf-import-folder').addEventListener('click', choosePdfDirectory);
@@ -3229,7 +3500,7 @@ el('pdf-annotation-list').addEventListener('click', async event => {
   else if (action === 'delete' && confirm('删除这条 PDF 标注？')) { state.pdfRecord.annotations = currentPdfAnnotations().filter(value => value.id !== id); await persistPdfRecord(); renderPdfAnnotationLayerForPage(annotation.page); renderPdfAnnotationList(); }
 });
 el('save-note').addEventListener('click', () => { const record = ensureRecord(getPaper(state.selectedPaperId)); record.note = el('paper-note').value.trim(); record.tags = [...new Set(el('paper-tags').value.split(/[,，]/).map(value => value.trim()).filter(Boolean))].slice(0, 12); record.progress = Number(el('reading-progress').value); if (record.progress === 100) record.readAt ||= new Date().toISOString(); else record.readAt = null; saveLibrary(); toast('阅读记录已保存'); });
-el('add-to-collection').addEventListener('click', () => { const collectionId = el('paper-collection').value; if (!collectionId) return toast('请先选择专题'); const record = ensureRecord(getPaper(state.selectedPaperId)); if (!record.collections.includes(collectionId)) record.collections.push(collectionId); saveLibrary(); toast('已加入专题收藏'); });
+el('add-to-collection').addEventListener('click', () => { const collectionId = el('paper-collection').value; if (!collectionId) return toast('请先选择分类'); const record = ensureRecord(getPaper(state.selectedPaperId)); record.trashAt = null; record.archivedAt = null; if (!record.collections.includes(collectionId)) record.collections.push(collectionId); saveLibrary(); toast('已加入分类'); });
 el('add-highlight').addEventListener('click', () => { const selection = window.getSelection(); const text = selection?.toString().replace(/\s+/g, ' ').trim(); const anchor = selection?.anchorNode; if (!text || text.length < 3) return toast('请先选中摘要文字'); if (text.length > 500) return toast('单条标注最多 500 字符'); if (!anchor || !el('detail-abstract').contains(anchor.nodeType === Node.TEXT_NODE ? anchor.parentNode : anchor)) return toast('只能标注摘要文字'); const record = ensureRecord(getPaper(state.selectedPaperId)); if (record.highlights.some(item => item.text === text)) return toast('这段文字已经标注'); record.highlights.push({ id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()), text, color: el('highlight-color').value, createdAt: new Date().toISOString() }); saveLibrary(); selection.removeAllRanges(); renderHighlights(); toast('标注已保存'); });
 el('highlight-list').addEventListener('click', event => { const button = event.target.closest('[data-highlight-remove]'); if (!button) return; const record = getRecord(state.selectedPaperId); record.highlights = record.highlights.filter(item => item.id !== button.dataset.highlightRemove); saveLibrary(); renderHighlights(); });
 el('previous-paper').addEventListener('click', () => moveDetail(-1)); el('next-paper').addEventListener('click', () => moveDetail(1));
@@ -3237,13 +3508,35 @@ el('previous-paper').addEventListener('click', () => moveDetail(-1)); el('next-p
 el('open-compare').addEventListener('click', renderCompare); el('clear-compare').addEventListener('click', () => { state.compare.clear(); updateCompareTray(); renderCurrentView(); }); el('compare-table').addEventListener('click', event => { const button = event.target.closest('[data-compare-remove]'); if (button) { state.compare.delete(button.dataset.compareRemove); updateCompareTray(); renderCompare(); } });
 el('command-open').addEventListener('click', () => openCommand()); el('command-input').addEventListener('input', event => renderCommands(event.target.value)); el('command-list').addEventListener('click', event => { const route = event.target.closest('[data-command-route]')?.dataset.commandRoute; const paper = event.target.closest('[data-command-paper]')?.dataset.commandPaper; closeModal('command-modal'); if (route) navigate(route); else if (paper) openPaperRoute(paper); });
 el('translation-open').addEventListener('click', openTranslationSettings);
+function mobileMoreItems() { return [...el('mobile-more-menu').querySelectorAll('[role="menuitem"]:not([disabled])')]; }
+function closeMobileMore({ restoreFocus = false } = {}) {
+  const menu = el('mobile-more-menu'); if (!menu.classList.contains('open')) return;
+  menu.classList.remove('open'); el('mobile-more').setAttribute('aria-expanded', 'false');
+  if (restoreFocus) el('mobile-more').focus();
+}
+function openMobileMore() {
+  el('mobile-more-menu').classList.add('open'); el('mobile-more').setAttribute('aria-expanded', 'true');
+  requestAnimationFrame(() => mobileMoreItems()[0]?.focus());
+}
 el('mobile-more').addEventListener('click', () => {
   const open = !el('mobile-more-menu').classList.contains('open');
-  el('mobile-more-menu').classList.toggle('open', open);
-  el('mobile-more').setAttribute('aria-expanded', String(open));
+  open ? openMobileMore() : closeMobileMore({ restoreFocus: true });
 });
-el('mobile-import-pdf').addEventListener('click', () => { el('mobile-more-menu').classList.remove('open'); openPdfImportCenter(); });
-el('mobile-appearance').addEventListener('click', () => { el('mobile-more-menu').classList.remove('open'); openAppearanceSettings(); });
+el('mobile-more-menu').addEventListener('keydown', event => {
+  const items = mobileMoreItems(); const index = items.indexOf(document.activeElement);
+  if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeMobileMore({ restoreFocus: true }); return; }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1 : event.key === 'ArrowDown' ? (index + 1 + items.length) % items.length : (index - 1 + items.length) % items.length;
+  items[next]?.focus();
+});
+el('mobile-import-pdf').addEventListener('click', () => { closeMobileMore(); openPdfImportCenter(); });
+el('mobile-backup').addEventListener('click', () => { closeMobileMore(); exportCompleteBackup(); });
+el('mobile-shortcuts').addEventListener('click', () => { closeMobileMore(); navigate('settings'); setTimeout(() => el('settings-help')?.scrollIntoView({ behavior: 'smooth' }), 80); });
+document.addEventListener('click', event => {
+  if (!el('mobile-more-menu').classList.contains('open') || event.target.closest('#mobile-more-menu,#mobile-more')) return;
+  closeMobileMore();
+});
 el('translation-enabled').addEventListener('change', event => { translationSettings.enabled = event.target.checked; saveTranslationSettings(); if (translationSettings.enabled) detectTranslationCapability(); });
 el('translation-mode').addEventListener('change', event => { translationSettings.mode = event.target.value; saveTranslationSettings(); });
 el('translation-word-click').addEventListener('change', event => { translationSettings.wordClick = event.target.checked; saveTranslationSettings(); });
@@ -3311,6 +3604,7 @@ document.addEventListener('keydown', event => {
   }
   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') { event.preventDefault(); openCommand(); return; }
   if (event.key === 'Escape') {
+    if (el('mobile-more-menu').classList.contains('open')) { event.preventDefault(); closeMobileMore({ restoreFocus: true }); return; }
     if (pdfOpen) {
       const translationWasOpen = el('translation-popover').classList.contains('open');
       if (cancelPdfAnnotationInteraction() || translationWasOpen) { event.preventDefault(); return; }
@@ -3333,7 +3627,12 @@ function applyUiSettings({ save = true } = {}) {
   root.dataset.sidebar = uiSettings.sidebar === 'collapsed' ? 'collapsed' : 'expanded';
   root.classList.toggle('reduce-motion', Boolean(uiSettings.reduceMotion));
   root.style.setProperty('--user-font-scale', String(Math.max(.9, Math.min(1.3, Number(uiSettings.fontScale || 1)))));
-  el('theme-toggle').textContent = root.dataset.theme === 'dark' ? '☀' : '◐';
+  el('theme-toggle').textContent = root.dataset.theme === 'dark' ? '切换为明亮主题' : '切换为深色主题';
+  if (el('settings-ui-summary')) {
+    const presetNames = { classic: '经典绿', compact: '紧凑学术', focus: '专注阅读', accessible: '高可访问' };
+    const densityNames = { comfortable: '舒适', standard: '标准', compact: '紧凑' };
+    el('settings-ui-summary').textContent = `${presetNames[uiSettings.preset] || '经典绿'} · ${densityNames[uiSettings.density] || '标准'} · ${Math.round(Number(uiSettings.fontScale || 1) * 100)}%`;
+  }
   if (save) {
     localStorage.setItem(UI_SETTINGS_KEY, JSON.stringify(uiSettings));
     localStorage.setItem(THEME_KEY, uiSettings.theme);
@@ -3381,11 +3680,19 @@ el('appearance-reset').addEventListener('click', () => { uiSettings = { ...UI_DE
 matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { if (uiSettings.theme === 'system') applyUiSettings({ save: false }); });
 window.addEventListener('scroll', () => el('backtop').classList.toggle('show', window.scrollY > 500)); el('backtop').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
 window.addEventListener('hashchange', renderRoute); window.addEventListener('resize', () => {
+  if (window.innerWidth > 720) closeMobileMore();
   if (translationSettings.positionMode !== 'pinned' || !translationSettings.position) return;
   translationSettings.position = clampedTranslationPosition(translationSettings.position.left, translationSettings.position.top);
   if (el('translation-popover').classList.contains('open')) positionTranslationPopover(state.translationPayload?.rect || { left: 20, top: 20, bottom: 21, width: 1, height: 1 });
 });
-window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); state.installPrompt = event; el('install-app').classList.add('show'); }); el('install-app').addEventListener('click', async () => { if (!state.installPrompt) return; state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; el('install-app').classList.remove('show'); }); window.addEventListener('appinstalled', () => toast('PaperScope 已安装'));
+async function promptAppInstall() {
+  if (!state.installPrompt) return toast('当前浏览器暂未提供安装提示，可使用浏览器菜单安装此应用');
+  state.installPrompt.prompt(); await state.installPrompt.userChoice; state.installPrompt = null; el('install-app').classList.remove('show');
+}
+window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); state.installPrompt = event; el('install-app').classList.add('show'); });
+el('install-app').addEventListener('click', promptAppInstall);
+el('settings-install').addEventListener('click', promptAppInstall);
+window.addEventListener('appinstalled', () => toast('PaperScope 已安装'));
 
 applyUiSettings(); applyTranslationSettings(); setupTranslationDragging(); loadDomainDictionary().catch(() => {}); detectTranslationCapability(); renderProfile(); renderCollectionOptions('all'); if (!location.hash.startsWith('#/')) history.replaceState(null, '', '#/home'); registerAppServiceWorker(); loadData();
 openPdfDatabase().then(async () => {
