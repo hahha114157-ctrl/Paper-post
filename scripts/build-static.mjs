@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.join(root, 'dist');
 const USER_AGENT = `PaperScope/5.1 (${process.env.CONTACT_EMAIL || 'https://github.com/hahha114157-ctrl/Paper-post'})`;
-const STATIC_FILES = ['index.html', 'app.js', 'pdf-storage.js', 'library-logic.js', 'manifest.webmanifest', 'service-worker.js', 'icon.svg'];
+const STATIC_FILES = ['index.html', 'app.js', 'pdf-storage.js', 'library-logic.js', 'ui-logic.js', 'manifest.webmanifest', 'service-worker.js', 'icon.svg'];
 const DAY = 86_400_000;
 const now = new Date();
 const currentYear = now.getUTCFullYear();
