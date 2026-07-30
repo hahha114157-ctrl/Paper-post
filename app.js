@@ -10,6 +10,7 @@ import {
   openPdfDatabase,
   putPdfAnnotations,
   putPdfBundle,
+  putPdfWorkspaceNote,
   putPdfTextState,
   savePdfImportJob,
   searchPdfTextIndex
@@ -35,7 +36,7 @@ import {
   segmentReaderText
 } from './ui-logic.js';
 
-const APP_VERSION = '6.7.0';
+const APP_VERSION = '6.8.0';
 const STORAGE_KEY = 'paperscope-library-v4';
 const V3_STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
@@ -93,10 +94,10 @@ const state = {
   pdfModule: null, pdfLibModule: null, tesseractModule: null, ocrWorker: null,
   pdfLoadingTask: null, pdfDocument: null, pdfRecord: null, pdfPaperId: null, pdfPage: 1, pdfScale: 1.4, pdfRenderTask: null,
   pdfTextContent: null, pdfSelection: null, pdfAnnotationMode: null, pdfAnnotationDraft: null, pdfTextSelectionDraft: null, pdfBrowseSelection: null, pdfSuppressWordClick: false, pdfAnnotationHistory: [], libraryPdfMatches: null,
-  pdfSnapshots: [], pdfSnapshotDrag: null, pdfSnapshotZ: 45,
+  pdfSnapshots: [], pdfSnapshotDrag: null, pdfSnapshotZ: 45, pdfNoteSaveTimer: null, pdfNoteDirty: false,
   pdfViewMode: localStorage.getItem(PDF_VIEW_MODE_KEY) === 'paged' ? 'paged' : 'continuous',
   pdfInspectorOpen: initialPdfInspectorSetting === null ? matchMedia('(min-width:1100px)').matches : initialPdfInspectorSetting === 'open',
-  pdfInspectorTab: localStorage.getItem(PDF_INSPECTOR_TAB_KEY) === 'text' ? 'text' : 'annotations',
+  pdfInspectorTab: localStorage.getItem(PDF_INSPECTOR_TAB_KEY) === 'notes' ? 'notes' : 'annotations',
   pdfColumnTemplate: null,
   pdfContinuousObserver: null, pdfPageObserver: null, pdfContinuousTasks: new Map(), pdfPageVisibility: new Map(),
   pdfImportQueue: [], pdfImportActive: false, pdfImportCancelId: null,
@@ -138,9 +139,8 @@ const UI_DEFAULTS = {
   density: 'standard',
   fontScale: 1,
   sidebar: 'expanded',
-  readerControls: 'auto',
-  readerTextMode: 'paragraphs',
   readerPane: 'standard',
+  noteFont: 'standard',
   reduceMotion: matchMedia('(prefers-reduced-motion: reduce)').matches
 };
 let uiSettings = { ...UI_DEFAULTS, ...readJson(UI_SETTINGS_KEY, {}) };
@@ -699,6 +699,12 @@ async function permanentlyDeleteRecords(ids = selectedRecordIds()) {
   }
 }
 
+function renderNewsCard(item, group, index) {
+  const image = safeUrl(item.image || '');
+  const hasImage = image !== '#';
+  const context = item.summary || `来自 ${cleanNewsSource(item.source)} 官方频道的研究动态。`;
+  return `<a class="news-card ${index === 0 ? 'featured' : ''}" href="${escapeHtml(safeUrl(item.link))}" target="_blank" rel="noopener"><div class="news-meta"><span class="news-source">${escapeHtml(cleanNewsSource(item.source))}</span><span class="news-official">官方</span><time class="news-date">${escapeHtml(dateText(item.published))}</time></div><h3 data-translatable>${escapeHtml(item.title)}</h3><p>${escapeHtml(context)}</p><div class="news-extra"><div class="news-extra-inner"><div class="news-extra-content ${hasImage ? '' : 'no-image'}">${hasImage ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}<div><strong>补充信息</strong><span>${escapeHtml(context.slice(0, 300))}</span></div></div></div></div><div class="news-card-footer"><span>${escapeHtml(group.label)}</span><span>查看原文 ↗</span></div></a>`;
+}
 function renderNewsPage(route) {
   const q = route.query.q || ''; const source = route.query.source || 'all'; const size = Number(route.query.size) === 18 ? 18 : 9; const page = Math.max(1, Number(route.query.page || 1));
   const groupMode = ['topic', 'newest', 'source'].includes(route.query.group) ? route.query.group : 'topic';
@@ -710,7 +716,7 @@ function renderNewsPage(route) {
   const pages = Math.max(1, Math.ceil(ordered.length / size)); const safePage = Math.min(page, pages); const pageItems = ordered.slice((safePage - 1) * size, safePage * size);
   const pageGroups = groupNewsItems(pageItems, groupMode);
   el('news-result-count').textContent = `${ordered.length} 条资讯 · ${pageGroups.length} 个分组 · 第 ${safePage}/${pages} 页`; el('news-sync').textContent = `更新 ${dateText(state.news.generatedAt, true)}`;
-  el('news-list').innerHTML = pageGroups.map(group => `<section class="news-cluster"><header class="news-cluster-head"><div><h2>${escapeHtml(group.label)}</h2><p>${escapeHtml(group.description)}</p></div><span class="news-cluster-count">${group.items.length} 条</span></header><div class="news-cluster-grid">${group.items.map((item, index) => `<a class="news-card ${index === 0 ? 'featured' : ''}" href="${escapeHtml(safeUrl(item.link))}" target="_blank" rel="noopener"><div class="news-meta"><span class="news-source">${escapeHtml(cleanNewsSource(item.source))}</span><span class="news-official">官方</span><time class="news-date">${escapeHtml(dateText(item.published))}</time></div><h3 data-translatable>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary || '打开官方页面查看详情。')}</p><div class="news-card-footer"><span>${escapeHtml(group.label)}</span><span>查看原文 ↗</span></div></a>`).join('')}</div></section>`).join('') || '<div class="empty">没有匹配资讯。</div>';
+  el('news-list').innerHTML = pageGroups.map(group => `<section class="news-cluster"><header class="news-cluster-head"><div><h2>${escapeHtml(group.label)}</h2><p>${escapeHtml(group.description)}</p></div><span class="news-cluster-count">${group.items.length} 条</span></header><div class="news-cluster-grid">${group.items.map((item, index) => renderNewsCard(item, group, index)).join('')}</div></section>`).join('') || '<div class="empty">没有匹配资讯。</div>';
   renderPagination('news-pagination', safePage, pages, next => navigate('news', { ...route.query, page: next }));
 }
 function venueRank(venue) { return venue.state === 'open' ? 0 : venue.state === 'rolling' ? 1 : venue.state === 'unannounced' ? 2 : 3; }
@@ -851,7 +857,8 @@ async function exportCompleteBackup() {
         paperId: document.paperId,
         attachmentId: document.attachmentId,
         pageCount: document.pageCount,
-        annotations: bundle?.annotations || []
+        annotations: bundle?.annotations || [],
+        workspaceNote: bundle?.workspaceNote || { text: '', images: [], updatedAt: null }
       }, null, 2));
       manifest.push({ paperId: document.paperId, attachmentId: document.attachmentId, fileName: document.fileName, backupFile: `${stem}.pdf`, fingerprint: document.fingerprint });
     }
@@ -978,6 +985,11 @@ function storedPdfDefaults(stored) {
   if (!stored) return null;
   stored.pages ||= Array.from({ length: stored.pageCount || 0 }, () => '');
   stored.annotations ||= [];
+  stored.workspaceNote = {
+    text: String(stored.workspaceNote?.text || '').slice(0, 200_000),
+    images: Array.isArray(stored.workspaceNote?.images) ? stored.workspaceNote.images.filter(item => item?.id && /^data:image\//.test(item.dataUrl || '')).slice(0, 12) : [],
+    updatedAt: stored.workspaceNote?.updatedAt || null
+  };
   stored.ocrPages ||= {};
   stored.extractionErrors ||= {};
   stored.schemaVersion ||= 2;
@@ -1074,6 +1086,7 @@ async function parseAndStorePdf(file, paperId, { attachmentId = null, preserveAn
       pageCount: pdf.numPages,
       pages,
       annotations: previous?.annotations || [],
+      workspaceNote: previous?.workspaceNote || { text: '', images: [], updatedAt: null },
       ocrPages: {},
       extractionErrors,
       metadata: { title: metadata.info?.Title || '', author: metadata.info?.Author || '', subject: metadata.info?.Subject || '' },
@@ -1328,6 +1341,8 @@ async function openPdfReader(paperId) {
     el('pdf-meta').textContent = `${stored.fileName} · ${(stored.size / 1024 / 1024).toFixed(1)} MB · 本机存储 · ${stored.annotations.length} 条标注`;
     el('pdf-search-input').value = ''; el('pdf-search-results').classList.add('hidden'); el('pdf-search-results').innerHTML = '';
     el('pdf-modal').classList.add('open');
+    state.pdfNoteDirty = false;
+    renderPdfWorkspaceNote();
     applyPdfInspectorState();
     updatePdfAnnotationMode();
     await renderPdfPage();
@@ -1453,11 +1468,7 @@ function updatePdfCurrentPage(pageNumber, { save = true } = {}) {
   const text = state.pdfRecord.pages[state.pdfPage - 1] || '';
   renderPdfPageText(text);
   el('pdf-page-label').textContent = `${state.pdfPage} / ${state.pdfDocument.numPages}`;
-  el('pdf-pane-page').textContent = String(state.pdfPage);
   el('pdf-prev').disabled = state.pdfPage <= 1; el('pdf-next').disabled = state.pdfPage >= state.pdfDocument.numPages;
-  const extractionSource = state.pdfRecord.ocrPages?.[state.pdfPage] ? `OCR · ${state.pdfRecord.ocrPages[state.pdfPage].language || '中英'}` : text ? `PDF 文本层 · ${text.length.toLocaleString('zh-CN')} 字符` : state.pdfRecord.extractionErrors?.[state.pdfPage] ? `解析失败：${state.pdfRecord.extractionErrors[state.pdfPage]}` : '未检测到有效文本层，可使用 OCR';
-  el('pdf-extraction-report').textContent = extractionSource;
-  el('pdf-extraction-report').classList.toggle('warn', !text || Boolean(state.pdfRecord.extractionErrors?.[state.pdfPage]));
   renderPdfAnnotationList();
   const attachment = getRecord(state.pdfPaperId)?.pdfAttachment;
   if (save && attachment && attachment.lastPage !== state.pdfPage) { attachment.lastPage = state.pdfPage; saveLibrary(); }
@@ -1613,26 +1624,20 @@ function renderPdfAnnotationLayer(viewport, pageNumber = state.pdfPage, layer = 
 }
 function annotationTypeLabel(type) { return type === 'highlight' ? '高亮' : type === 'underline' ? '下划线' : type === 'note' ? '批注' : '区域'; }
 function preferredReaderControlsPlacement() {
-  if (uiSettings.readerControls === 'top') return 'top';
-  if (uiSettings.readerControls === 'sidebar') return window.innerWidth > 820 ? 'sidebar' : 'top';
-  return window.innerWidth >= 1100 ? 'sidebar' : 'top';
+  return 'sidebar';
 }
 function placePdfReaderControls() {
   const config = el('pdf-toolbar-config'); const topSlot = el('pdf-toolbar-controls-slot'); const sideSlot = el('pdf-sidebar-controls-slot');
   if (!config || !topSlot || !sideSlot) return;
-  const placement = preferredReaderControlsPlacement() === 'sidebar' && state.pdfInspectorOpen ? 'sidebar' : 'top';
-  const target = placement === 'sidebar' ? sideSlot : topSlot;
-  if (config.parentElement !== target) target.append(config);
-  topSlot.classList.toggle('hidden', placement !== 'top');
-  sideSlot.classList.toggle('hidden', placement !== 'sidebar');
-  document.documentElement.dataset.pdfControlsPlacement = placement;
+  if (config.parentElement !== sideSlot) sideSlot.append(config);
+  topSlot.classList.add('hidden');
+  sideSlot.classList.remove('hidden');
+  document.documentElement.dataset.pdfControlsPlacement = preferredReaderControlsPlacement();
 }
-function syncPdfReaderPreferences({ renderText = true } = {}) {
+function syncPdfReaderPreferences() {
   document.documentElement.dataset.readerPane = uiSettings.readerPane === 'wide' ? 'wide' : 'standard';
-  document.documentElement.dataset.readerText = readerTextMode();
-  if (el('pdf-text-mode')) el('pdf-text-mode').value = readerTextMode();
+  document.documentElement.dataset.noteFont = uiSettings.noteFont === 'large' ? 'large' : 'standard';
   placePdfReaderControls();
-  if (renderText && state.pdfRecord) renderPdfPageText(state.pdfRecord.pages?.[state.pdfPage - 1] || '');
 }
 function applyPdfInspectorState() {
   const pane = el('pdf-text-pane'); const reader = el('pdf-reader'); const toggle = el('pdf-inspector-toggle');
@@ -1645,12 +1650,12 @@ function applyPdfInspectorState() {
     button.classList.toggle('active', active); button.setAttribute('aria-selected', String(active));
   });
   el('pdf-pane-annotations').classList.toggle('hidden', state.pdfInspectorTab !== 'annotations');
-  el('pdf-pane-text').classList.toggle('hidden', state.pdfInspectorTab !== 'text');
+  el('pdf-pane-notes').classList.toggle('hidden', state.pdfInspectorTab !== 'notes');
   placePdfReaderControls();
 }
 function setPdfInspector(open, tab = state.pdfInspectorTab) {
   state.pdfInspectorOpen = Boolean(open);
-  state.pdfInspectorTab = tab === 'text' ? 'text' : 'annotations';
+  state.pdfInspectorTab = tab === 'notes' ? 'notes' : 'annotations';
   localStorage.setItem(PDF_INSPECTOR_OPEN_KEY, state.pdfInspectorOpen ? 'open' : 'closed');
   localStorage.setItem(PDF_INSPECTOR_TAB_KEY, state.pdfInspectorTab);
   applyPdfInspectorState();
@@ -1661,15 +1666,112 @@ function renderPdfAnnotationList(selectedId = null) {
   el('pdf-annotation-list').innerHTML = annotations.length ? annotations.map((item, index) => `<article class="pdf-annotation-item ${selectedId === item.id ? 'selected' : ''}" style="border-left-color:${escapeHtml(item.color)}" data-pdf-annotation-id="${escapeHtml(item.id)}"><strong>${index + 1}. 第 ${item.page} 页 · ${annotationTypeLabel(item.type)}</strong>${item.text ? `<p>${escapeHtml(item.text.slice(0, 220))}</p>` : ''}${item.comment ? `<p>批注：${escapeHtml(item.comment)}</p>` : ''}<div class="pdf-annotation-actions"><button data-pdf-annotation-action="goto">定位</button><button data-pdf-annotation-action="comment">编辑批注</button><button data-pdf-annotation-action="delete">删除</button></div></article>`).join('') : '<div class="mono">暂无 PDF 标注。选择页面文字或使用区域工具开始标注。</div>';
 }
 async function persistPdfRecord(kind = 'annotations') {
-  if (!state.pdfRecord) return;
-  if (kind === 'text') await putPdfTextState(state.pdfRecord);
-  else await putPdfAnnotations(state.pdfPaperId, state.pdfRecord.attachmentId, state.pdfRecord.annotations);
-  const record = getRecord(state.pdfPaperId);
+  const pdfRecord = state.pdfRecord; const paperId = state.pdfPaperId;
+  if (!pdfRecord || !paperId) return;
+  if (kind === 'text') await putPdfTextState(pdfRecord);
+  else if (kind === 'workspace') await putPdfWorkspaceNote(paperId, pdfRecord.attachmentId, pdfRecord.workspaceNote);
+  else await putPdfAnnotations(paperId, pdfRecord.attachmentId, pdfRecord.annotations);
+  const record = getRecord(paperId);
   if (record) {
-    record.pdfAttachment = pdfAttachmentMeta(state.pdfRecord, record.pdfAttachment || {}); saveLibrary();
-    if (state.selectedPaperId === state.pdfPaperId) renderPdfAttachmentStatus(record);
+    record.pdfAttachment = pdfAttachmentMeta(pdfRecord, record.pdfAttachment || {}); saveLibrary();
+    if (state.selectedPaperId === paperId) renderPdfAttachmentStatus(record);
   }
-  el('pdf-meta').textContent = `${state.pdfRecord.fileName} · ${(state.pdfRecord.size / 1024 / 1024).toFixed(1)} MB · 本机存储 · ${currentPdfAnnotations().length} 条标注`;
+  if (state.pdfRecord === pdfRecord) el('pdf-meta').textContent = `${pdfRecord.fileName} · ${(pdfRecord.size / 1024 / 1024).toFixed(1)} MB · 本机存储 · ${pdfRecord.annotations.length} 条标注`;
+}
+const PDF_NOTE_MAX_IMAGES = 12;
+const PDF_NOTE_MAX_BYTES = 8 * 1024 * 1024;
+function currentPdfWorkspaceNote() {
+  if (!state.pdfRecord) return null;
+  state.pdfRecord.workspaceNote ||= { text: '', images: [], updatedAt: null };
+  return state.pdfRecord.workspaceNote;
+}
+function pdfNoteDataBytes(note = currentPdfWorkspaceNote()) {
+  return (note?.images || []).reduce((total, image) => total + Math.ceil(String(image.dataUrl || '').length * .75), 0);
+}
+function renderPdfWorkspaceNote() {
+  const note = currentPdfWorkspaceNote(); const editor = el('pdf-workspace-editor'); const gallery = el('pdf-note-images');
+  if (!note || !editor || !gallery) return;
+  editor.textContent = note.text || '';
+  gallery.innerHTML = note.images.length ? note.images.map((image, index) => `<article class="pdf-note-image" data-pdf-note-image="${escapeHtml(image.id)}"><img src="${escapeHtml(image.dataUrl)}" alt="${escapeHtml(image.name || `笔记图片 ${index + 1}`)}"><footer><span>${escapeHtml(image.name || `图片 ${index + 1}`)} · ${escapeHtml(dateText(image.createdAt))}</span><button type="button" data-pdf-note-image-action="delete">删除</button></footer></article>`).join('') : '<div class="panel-note">还没有图片。可插入本机图片，也可把框选截图直接存入笔记。</div>';
+  el('pdf-note-status').textContent = note.updatedAt
+    ? `已保存 ${dateText(note.updatedAt, true)} · ${note.images.length}/${PDF_NOTE_MAX_IMAGES} 张 · ${(pdfNoteDataBytes(note) / 1024 / 1024).toFixed(1)} MB`
+    : `文字与图片保存在当前浏览器；最多 ${PDF_NOTE_MAX_IMAGES} 张图片、约 8 MB。`;
+}
+function updatePdfWorkspaceTextFromEditor() {
+  const note = currentPdfWorkspaceNote(); const editor = el('pdf-workspace-editor');
+  if (!note || !editor) return;
+  note.text = String(editor.innerText || editor.textContent || '').replace(/\u00a0/g, ' ').slice(0, 200_000);
+  state.pdfNoteDirty = true;
+}
+async function savePdfWorkspaceNote({ quiet = false } = {}) {
+  const note = currentPdfWorkspaceNote(); if (!note) return;
+  clearTimeout(state.pdfNoteSaveTimer); state.pdfNoteSaveTimer = null;
+  updatePdfWorkspaceTextFromEditor();
+  note.updatedAt = new Date().toISOString();
+  if (el('pdf-note-status')) el('pdf-note-status').textContent = '正在保存…';
+  try {
+    await persistPdfRecord('workspace');
+    state.pdfNoteDirty = false;
+    if (state.pdfRecord && el('pdf-note-status')) el('pdf-note-status').textContent = `已保存刚刚 · ${note.images.length}/${PDF_NOTE_MAX_IMAGES} 张 · ${(pdfNoteDataBytes(note) / 1024 / 1024).toFixed(1)} MB`;
+    if (!quiet) toast('阅读笔记已保存');
+  } catch (error) {
+    if (el('pdf-note-status')) el('pdf-note-status').textContent = '保存失败，请导出笔记后重试';
+    if (!quiet) toast(`笔记保存失败：${error.message || '存储空间不足'}`);
+  }
+}
+function schedulePdfWorkspaceSave() {
+  updatePdfWorkspaceTextFromEditor();
+  if (el('pdf-note-status')) el('pdf-note-status').textContent = '内容有修改，正在自动保存…';
+  clearTimeout(state.pdfNoteSaveTimer);
+  state.pdfNoteSaveTimer = setTimeout(() => savePdfWorkspaceNote({ quiet: true }), 650);
+}
+function blobDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('无法读取图片'));
+    reader.readAsDataURL(blob);
+  });
+}
+async function compressedPdfNoteImage(blob, name = '阅读截图') {
+  if (!blob?.type?.startsWith('image/')) throw new Error('请选择图片文件');
+  if (blob.size > 16 * 1024 * 1024) throw new Error('单张原图不能超过 16 MB');
+  const bitmap = await createImageBitmap(blob);
+  const scale = Math.min(1, 1400 / bitmap.width, 1400 / bitmap.height);
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale)); canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  canvas.getContext('2d', { alpha: false }).drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  const output = await new Promise(resolve => canvas.toBlob(resolve, 'image/webp', .82));
+  if (!output) throw new Error('图片压缩失败');
+  return { id: crypto.randomUUID ? crypto.randomUUID() : `note-image-${Date.now()}`, name: String(name || '阅读图片').slice(0, 100), dataUrl: await blobDataUrl(output), createdAt: new Date().toISOString() };
+}
+async function addPdfWorkspaceImage(blob, name) {
+  const note = currentPdfWorkspaceNote(); if (!note) return toast('请先打开一篇 PDF');
+  if (note.images.length >= PDF_NOTE_MAX_IMAGES) return toast(`每篇笔记最多保存 ${PDF_NOTE_MAX_IMAGES} 张图片`);
+  try {
+    const image = await compressedPdfNoteImage(blob, name);
+    if (pdfNoteDataBytes(note) + image.dataUrl.length * .75 > PDF_NOTE_MAX_BYTES) throw new Error('图片笔记已接近 8 MB 上限，请删除旧图或先导出');
+    note.images.push(image); note.updatedAt = new Date().toISOString(); state.pdfNoteDirty = true;
+    setPdfInspector(true, 'notes'); renderPdfWorkspaceNote();
+    await savePdfWorkspaceNote({ quiet: true });
+    toast('图片已插入阅读笔记');
+  } catch (error) { toast(error.message || '图片插入失败'); }
+}
+async function addLatestPdfSnapshotToNote() {
+  const snapshot = [...state.pdfSnapshots].reverse().find(item => item.paperId === state.pdfPaperId && item.blob);
+  if (!snapshot) return toast('当前论文还没有截图，请先按 S 框选截图');
+  await addPdfWorkspaceImage(snapshot.blob, `第 ${snapshot.page} 页截图`);
+}
+async function exportPdfWorkspaceNote() {
+  const note = currentPdfWorkspaceNote(); if (!note) return;
+  await savePdfWorkspaceNote({ quiet: true });
+  const title = getPaper(state.pdfPaperId)?.title || state.pdfRecord?.fileName || '阅读笔记';
+  const paragraphs = escapeHtml(note.text || '').replace(/\n/g, '<br>');
+  const images = note.images.map(image => `<figure><img src="${image.dataUrl}" alt="${escapeHtml(image.name)}"><figcaption>${escapeHtml(image.name)}</figcaption></figure>`).join('');
+  const documentHtml = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · 阅读笔记</title><style>body{max-width:900px;margin:40px auto;padding:0 24px;font:16px/1.75 system-ui;color:#18231e}h1{font-size:26px}main{white-space:normal}figure{margin:24px 0}img{max-width:100%;height:auto;border:1px solid #dde5df;border-radius:8px}figcaption{color:#6d7b73;font-size:12px}</style><h1>${escapeHtml(title)}</h1><p>导出时间：${escapeHtml(new Date().toLocaleString('zh-CN'))}</p><main>${paragraphs || '<em>暂无文字笔记</em>'}${images}</main></html>`;
+  downloadText(`${safePdfFileStem(state.pdfRecord?.fileName || title)}-阅读笔记.html`, documentHtml, 'text/html');
+  toast('阅读笔记已导出');
 }
 function pdfSelectionToolType() {
   return ['highlight', 'underline', 'note'].includes(state.pdfAnnotationMode) ? state.pdfAnnotationMode : null;
@@ -2108,7 +2210,7 @@ function clearPdfBrowseSelection() {
   value.previewNodes?.forEach(node => node.remove());
   if (state.pdfSelection === value.selection) state.pdfSelection = null;
   state.pdfBrowseSelection = null;
-  if (!state.pdfAnnotationMode && el('pdf-modal')?.classList.contains('open')) el('pdf-tool-status').textContent = '浏览模式 · 拖选文字可翻译，S 框选截图';
+  if (!state.pdfAnnotationMode && el('pdf-modal')?.classList.contains('open')) el('pdf-tool-status').textContent = '浏览模式 · 拖选文字，S 框选截图';
   return true;
 }
 function pdfDraftPointInLayout(draft, event) {
@@ -2141,7 +2243,7 @@ async function capturePdfSelection({ applyTool = true } = {}) {
   const startElement = range.startContainer.nodeType === Node.TEXT_NODE ? range.startContainer.parentElement : range.startContainer;
   const endElement = range.endContainer.nodeType === Node.TEXT_NODE ? range.endContainer.parentElement : range.endContainer;
   const startStack = startElement?.closest?.('[data-pdf-page-stack]'); const endStack = endElement?.closest?.('[data-pdf-page-stack]');
-  const inSideText = pageText.contains(startElement) && pageText.contains(endElement);
+  const inSideText = Boolean(pageText?.contains(startElement) && pageText?.contains(endElement));
   if (!startStack && !inSideText) return false;
   if (startStack && startStack !== endStack) { toast('请在同一页内选择文字'); return false; }
   const pageNumber = startStack ? Number(startStack.dataset.page) : state.pdfPage;
@@ -2193,9 +2295,10 @@ function updatePdfAnnotationMode() {
     layer.classList.toggle('drawing', ['area', 'area-note', 'snapshot'].includes(state.pdfAnnotationMode));
     layer.classList.toggle('snapshot', state.pdfAnnotationMode === 'snapshot');
   });
-  const labels = { highlight: '高亮工具 H · 拖选后自动保存', underline: '下划线工具 U · 拖选后自动保存', note: '文字批注 N · 拖选后填写批注', area: '区域工具 R · 拖出矩形', 'area-note': '区域批注 Shift+N · 拖出矩形', snapshot: '截图工具 S · 在页面上拖出对照区域' };
+  const labels = { highlight: '高亮工具 H · 拖选后自动保存', underline: '下划线工具 U · 拖选后自动保存', note: '文字批注 N · 拖选后填写批注', area: '区域工具 R · 拖出矩形', 'area-note': '区域批注 Shift+N · 拖出矩形', snapshot: '截图工具 S · 拖动鼠标自由框选，Esc 取消' };
   const selected = state.pdfBrowseSelection?.selection;
-  el('pdf-tool-status').textContent = labels[state.pdfAnnotationMode] || (selected ? `已选择 ${selected.text.length} 字 · H 高亮 / U 下划线 / N 批注 / Ctrl+C 复制 / Esc 取消` : '浏览模式 · 拖选文字可翻译，S 框选截图');
+  el('pdf-tool-status').textContent = labels[state.pdfAnnotationMode] || (selected ? `已选择 ${selected.text.length} 字 · H 高亮 / U 下划线 / N 批注 / Ctrl+C 复制 / Esc 取消` : '浏览模式 · 拖选文字，S 框选截图');
+  el('pdf-snipping-hint')?.classList.toggle('hidden', state.pdfAnnotationMode !== 'snapshot');
   clearTimeout(state.translationSelectionTimer);
   if (state.pdfAnnotationMode) closeTranslationPopover();
 }
@@ -2250,7 +2353,7 @@ function addPdfSnapshotWindow(snapshot) {
   card.setAttribute('aria-label', `PDF 第 ${snapshot.page} 页截图对照`);
   card.style.left = `${Math.max(12, window.innerWidth - width - 28 - offset)}px`;
   card.style.top = `${Math.min(Math.max(18, 72 + offset), Math.max(18, window.innerHeight - 220))}px`;
-  card.innerHTML = `<header class="pdf-snapshot-head"><div class="pdf-snapshot-title"><strong>${escapeHtml(snapshot.paperTitle)}</strong><span>第 ${snapshot.page} 页 · 截图对照</span></div><div class="pdf-snapshot-actions"><button type="button" data-pdf-snapshot-action="shrink" aria-label="缩小截图">−</button><button type="button" data-pdf-snapshot-action="grow" aria-label="放大截图">＋</button><button type="button" data-pdf-snapshot-action="close" aria-label="关闭截图">×</button></div></header><img src="${snapshot.url}" alt="${escapeHtml(snapshot.paperTitle)} 第 ${snapshot.page} 页截图"><footer class="pdf-snapshot-foot"><span>拖动标题移动 · 右下角缩放</span><span>临时内存，不写入存储</span></footer>`;
+  card.innerHTML = `<header class="pdf-snapshot-head"><div class="pdf-snapshot-title"><strong>${escapeHtml(snapshot.paperTitle)}</strong><span>第 ${snapshot.page} 页 · 截图对照</span></div><div class="pdf-snapshot-actions"><button type="button" data-pdf-snapshot-action="note" aria-label="插入阅读笔记" title="插入阅读笔记">↘</button><button type="button" data-pdf-snapshot-action="shrink" aria-label="缩小截图">−</button><button type="button" data-pdf-snapshot-action="grow" aria-label="放大截图">＋</button><button type="button" data-pdf-snapshot-action="close" aria-label="关闭截图">×</button></div></header><img src="${snapshot.url}" alt="${escapeHtml(snapshot.paperTitle)} 第 ${snapshot.page} 页截图"><footer class="pdf-snapshot-foot"><span>拖动标题移动 · 右下角缩放</span><span>↘ 可存入阅读笔记</span></footer>`;
   layer.appendChild(card);
   bringPdfSnapshotToFront(card);
 }
@@ -2273,8 +2376,10 @@ async function createPdfSnapshot(pageNumber, rect) {
   const snapshot = {
     id: crypto.randomUUID ? crypto.randomUUID() : `snapshot-${Date.now()}`,
     page: pageNumber,
+    paperId: state.pdfPaperId,
     paperTitle: getPaper(state.pdfPaperId)?.title || state.pdfRecord?.fileName || 'PDF 截图',
-    url: URL.createObjectURL(blob)
+    url: URL.createObjectURL(blob),
+    blob
   };
   addPdfSnapshotWindow(snapshot);
   state.pdfSnapshots.push(snapshot);
@@ -2466,6 +2571,7 @@ async function importPdfAnnotationsFile(file) {
   } catch (error) { toast(error.message || '标注导入失败'); }
 }
 function closePdfReader() {
+  if (state.pdfRecord && state.pdfNoteDirty) savePdfWorkspaceNote({ quiet: true }).catch(() => {});
   state.pdfRenderTask?.cancel(); state.pdfRenderTask = null;
   clearPdfPageObservers(); cancelPdfAnnotationInteraction({ quiet: true });
   state.pdfLoadingTask?.destroy().catch(() => {});
@@ -2481,7 +2587,7 @@ function searchPdfText() {
     return `<button data-pdf-page="${item.page}"><b>第 ${item.page} 页</b><br>${escapeHtml(excerpt)}</button>`;
   }).join('') : '<div class="panel-note">全文中没有找到该关键词。</div>';
   container.classList.remove('hidden');
-  setPdfInspector(true, 'text');
+  setPdfInspector(true, 'annotations');
 }
 async function removeAttachedPdf(paperId) {
   if (!confirm('移除本机保存的 PDF？收藏、笔记和论文元数据会保留。')) return;
@@ -3536,15 +3642,22 @@ el('pdf-search-results').addEventListener('click', event => { const button = eve
 el('pdf-inspector-toggle').addEventListener('click', () => setPdfInspector(!state.pdfInspectorOpen));
 el('pdf-inspector-close').addEventListener('click', () => setPdfInspector(false));
 document.querySelectorAll('[data-pdf-pane-tab]').forEach(button => button.addEventListener('click', () => setPdfInspector(true, button.dataset.pdfPaneTab)));
-el('pdf-copy-page').addEventListener('click', () => copyText(state.pdfRecord?.pages?.[state.pdfPage - 1] || '', '本页文本已复制'));
-el('pdf-text-mode').addEventListener('change', event => {
-  uiSettings.readerTextMode = ['paragraphs', 'bilingual', 'plain'].includes(event.target.value) ? event.target.value : 'paragraphs';
-  applyUiSettings(); syncAppearanceControls();
+el('pdf-note-save').addEventListener('click', () => savePdfWorkspaceNote());
+el('pdf-workspace-editor').addEventListener('input', schedulePdfWorkspaceSave);
+el('pdf-note-add-image').addEventListener('click', () => el('pdf-note-image-file').click());
+el('pdf-note-image-file').addEventListener('change', async event => {
+  for (const file of [...event.target.files]) await addPdfWorkspaceImage(file, file.name);
+  event.target.value = '';
 });
-el('pdf-translate-page').addEventListener('click', translatePdfCurrentPage);
-el('pdf-page-text').addEventListener('click', event => {
-  const button = event.target.closest('[data-pdf-translate-paragraph]');
-  if (button) translatePdfParagraph(Number(button.dataset.pdfTranslateParagraph));
+el('pdf-note-add-snapshot').addEventListener('click', addLatestPdfSnapshotToNote);
+el('pdf-note-export').addEventListener('click', exportPdfWorkspaceNote);
+el('pdf-note-images').addEventListener('click', async event => {
+  const card = event.target.closest('[data-pdf-note-image]');
+  if (!card || event.target.closest('[data-pdf-note-image-action]')?.dataset.pdfNoteImageAction !== 'delete') return;
+  const note = currentPdfWorkspaceNote(); if (!note || !confirm('从阅读笔记中删除这张图片？')) return;
+  note.images = note.images.filter(image => image.id !== card.dataset.pdfNoteImage);
+  note.updatedAt = new Date().toISOString(); state.pdfNoteDirty = true; renderPdfWorkspaceNote();
+  await savePdfWorkspaceNote({ quiet: true });
 });
 el('pdf-reparse').addEventListener('click', reparsePdfText);
 el('pdf-ocr-page').addEventListener('click', ocrCurrentPdfPage);
@@ -3621,7 +3734,6 @@ el('pdf-pages-container').addEventListener('mouseup', event => {
   if (pdfSelectionToolType() || state.pdfBrowseSelection) return;
   setTimeout(() => capturePdfSelection({ applyTool: true }));
 });
-el('pdf-page-text').addEventListener('mouseup', () => setTimeout(() => capturePdfSelection({ applyTool: true })));
 el('pdf-canvas-stage').addEventListener('pointerdown', event => {
   const layer = event.target.closest('.pdf-annotation-layer'); if (!layer) return;
   const mark = event.target.closest('[data-annotation-id]');
@@ -3681,11 +3793,17 @@ function finishPdfSnapshotDrag(event) {
 }
 el('pdf-snapshot-layer').addEventListener('pointerup', finishPdfSnapshotDrag);
 el('pdf-snapshot-layer').addEventListener('pointercancel', finishPdfSnapshotDrag);
-el('pdf-snapshot-layer').addEventListener('click', event => {
+el('pdf-snapshot-layer').addEventListener('click', async event => {
   const card = event.target.closest('[data-pdf-snapshot-id]');
   const action = event.target.closest('[data-pdf-snapshot-action]')?.dataset.pdfSnapshotAction;
   if (!card || !action) return;
   if (action === 'close') return removePdfSnapshot(card.dataset.pdfSnapshotId);
+  if (action === 'note') {
+    const snapshot = state.pdfSnapshots.find(item => item.id === card.dataset.pdfSnapshotId);
+    if (!snapshot?.blob) return toast('截图内容已经不可用');
+    if (snapshot.paperId !== state.pdfPaperId) return toast('请打开截图对应的论文后再插入笔记');
+    return addPdfWorkspaceImage(snapshot.blob, `第 ${snapshot.page} 页截图`);
+  }
   const factor = action === 'grow' ? 1.18 : .84;
   const width = Math.max(240, Math.min(Math.min(760, window.innerWidth - 20), card.getBoundingClientRect().width * factor));
   card.style.width = `${width}px`;
@@ -3825,9 +3943,8 @@ function applyUiSettings({ save = true } = {}) {
   root.dataset.uiPreset = ['classic', 'compact', 'focus', 'accessible'].includes(uiSettings.preset) ? uiSettings.preset : 'classic';
   root.dataset.density = ['comfortable', 'standard', 'compact'].includes(uiSettings.density) ? uiSettings.density : 'standard';
   root.dataset.sidebar = uiSettings.sidebar === 'collapsed' ? 'collapsed' : 'expanded';
-  uiSettings.readerControls = ['auto', 'top', 'sidebar'].includes(uiSettings.readerControls) ? uiSettings.readerControls : 'auto';
-  uiSettings.readerTextMode = ['paragraphs', 'bilingual', 'plain'].includes(uiSettings.readerTextMode) ? uiSettings.readerTextMode : 'paragraphs';
   uiSettings.readerPane = uiSettings.readerPane === 'wide' ? 'wide' : 'standard';
+  uiSettings.noteFont = uiSettings.noteFont === 'large' ? 'large' : 'standard';
   root.classList.toggle('reduce-motion', Boolean(uiSettings.reduceMotion));
   root.style.setProperty('--user-font-scale', String(Math.max(.9, Math.min(1.3, Number(uiSettings.fontScale || 1)))));
   syncPdfReaderPreferences();
@@ -3836,9 +3953,7 @@ function applyUiSettings({ save = true } = {}) {
     const presetNames = { classic: '经典绿', compact: '紧凑学术', focus: '专注阅读', accessible: '高可访问' };
     const densityNames = { comfortable: '舒适', standard: '标准', compact: '紧凑' };
     el('settings-ui-summary').textContent = `${presetNames[uiSettings.preset] || '经典绿'} · ${densityNames[uiSettings.density] || '标准'} · ${Math.round(Number(uiSettings.fontScale || 1) * 100)}%`;
-    const readerControlNames = { auto: '智能侧栏', top: '顶部工具', sidebar: '侧栏工具' };
-    const readerTextNames = { paragraphs: '智能分段', bilingual: '分段对照', plain: '原始文本' };
-    el('settings-reader-summary').textContent = `${readerControlNames[uiSettings.readerControls]} · ${readerTextNames[uiSettings.readerTextMode]}`;
+    el('settings-reader-summary').textContent = `左侧工具 · ${uiSettings.readerPane === 'wide' ? '宽松' : '紧凑'} · 笔记${uiSettings.noteFont === 'large' ? '较大字号' : '标准字号'}`;
   }
   if (save) {
     localStorage.setItem(UI_SETTINGS_KEY, JSON.stringify(uiSettings));
@@ -3850,9 +3965,8 @@ function syncAppearanceControls() {
   el('appearance-density').value = uiSettings.density;
   el('appearance-font').value = String(uiSettings.fontScale);
   el('appearance-sidebar').value = uiSettings.sidebar;
-  el('appearance-reader-controls').value = uiSettings.readerControls;
-  el('appearance-reader-text').value = uiSettings.readerTextMode;
   el('appearance-reader-pane').value = uiSettings.readerPane;
+  el('appearance-note-font').value = uiSettings.noteFont;
   el('appearance-motion').checked = Boolean(uiSettings.reduceMotion);
   document.querySelectorAll('[data-ui-preset]').forEach(button => button.classList.toggle('active', button.dataset.uiPreset === uiSettings.preset));
 }
@@ -3868,9 +3982,8 @@ function updateAppearancePreview() {
     density: el('appearance-density').value,
     fontScale: Number(el('appearance-font').value),
     sidebar: el('appearance-sidebar').value,
-    readerControls: el('appearance-reader-controls').value,
-    readerTextMode: el('appearance-reader-text').value,
     readerPane: el('appearance-reader-pane').value,
+    noteFont: el('appearance-note-font').value,
     reduceMotion: el('appearance-motion').checked
   };
   applyUiSettings({ save: false });
@@ -3886,7 +3999,7 @@ document.querySelectorAll('[data-ui-preset]').forEach(button => button.addEventL
   syncAppearanceControls();
   applyUiSettings({ save: false });
 }));
-['appearance-theme', 'appearance-density', 'appearance-font', 'appearance-sidebar', 'appearance-reader-controls', 'appearance-reader-text', 'appearance-reader-pane'].forEach(id => el(id).addEventListener('change', updateAppearancePreview));
+['appearance-theme', 'appearance-density', 'appearance-font', 'appearance-sidebar', 'appearance-reader-pane', 'appearance-note-font'].forEach(id => el(id).addEventListener('change', updateAppearancePreview));
 el('appearance-motion').addEventListener('change', updateAppearancePreview);
 el('appearance-save').addEventListener('click', () => { updateAppearancePreview(); applyUiSettings(); appearanceSnapshot = null; closeModal('appearance-modal'); toast('界面配置已保存'); });
 el('appearance-reset').addEventListener('click', () => { uiSettings = { ...UI_DEFAULTS, preset: 'classic' }; applyUiSettings(); appearanceSnapshot = { ...uiSettings }; syncAppearanceControls(); toast('已恢复经典绿设置'); });

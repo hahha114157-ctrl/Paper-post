@@ -1,9 +1,10 @@
 const DB_NAME = 'paperscope-pdf-library-v1';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const LEGACY_STORE = 'pdfs';
 const DOCUMENT_STORE = 'pdfDocuments';
 const TEXT_STORE = 'pdfTextPages';
 const ANNOTATION_STORE = 'pdfAnnotations';
+const WORKSPACE_STORE = 'pdfWorkspaceNotes';
 const IMPORT_STORE = 'pdfImportJobs';
 
 let databasePromise = null;
@@ -77,6 +78,10 @@ export function openPdfDatabase() {
         const store = db.createObjectStore(ANNOTATION_STORE, { keyPath: 'attachmentId' });
         store.createIndex('paperId', 'paperId', { unique: false });
       }
+      if (!db.objectStoreNames.contains(WORKSPACE_STORE)) {
+        const store = db.createObjectStore(WORKSPACE_STORE, { keyPath: 'attachmentId' });
+        store.createIndex('paperId', 'paperId', { unique: false });
+      }
       if (!db.objectStoreNames.contains(IMPORT_STORE)) {
         const store = db.createObjectStore(IMPORT_STORE, { keyPath: 'id' });
         store.createIndex('status', 'status', { unique: false });
@@ -126,7 +131,7 @@ function attachmentIdFor(bundle) {
 export async function putPdfBundle(bundle) {
   const attachmentId = attachmentIdFor(bundle);
   const pages = Array.isArray(bundle.pages) ? bundle.pages : [];
-  await transactionResult([DOCUMENT_STORE, TEXT_STORE, ANNOTATION_STORE], 'readwrite', stores => {
+  await transactionResult([DOCUMENT_STORE, TEXT_STORE, ANNOTATION_STORE, WORKSPACE_STORE], 'readwrite', stores => {
     stores[DOCUMENT_STORE].put({
       attachmentId,
       paperId: bundle.paperId,
@@ -156,6 +161,11 @@ export async function putPdfBundle(bundle) {
       paperId: bundle.paperId,
       items: Array.isArray(bundle.annotations) ? bundle.annotations : []
     });
+    stores[WORKSPACE_STORE].put({
+      attachmentId,
+      paperId: bundle.paperId,
+      note: bundle.workspaceNote || { text: '', images: [], updatedAt: null }
+    });
   });
   return attachmentId;
 }
@@ -176,12 +186,14 @@ export async function getPdfBundle(paperId, preferredAttachmentId = null) {
   const document = await documentForPaper(paperId, preferredAttachmentId);
   if (!document) return null;
   const db = await openPdfDatabase();
-  const transaction = db.transaction([TEXT_STORE, ANNOTATION_STORE], 'readonly');
+  const transaction = db.transaction([TEXT_STORE, ANNOTATION_STORE, WORKSPACE_STORE], 'readonly');
   const textStore = transaction.objectStore(TEXT_STORE);
   const annotationStore = transaction.objectStore(ANNOTATION_STORE);
-  const [pageRows, annotationRow] = await Promise.all([
+  const workspaceStore = transaction.objectStore(WORKSPACE_STORE);
+  const [pageRows, annotationRow, workspaceRow] = await Promise.all([
     requestResult(textStore.index('attachmentId').getAll(document.attachmentId)),
-    requestResult(annotationStore.get(document.attachmentId))
+    requestResult(annotationStore.get(document.attachmentId)),
+    requestResult(workspaceStore.get(document.attachmentId))
   ]);
   const pages = Array.from({ length: document.pageCount }, () => '');
   const ocrPages = {};
@@ -193,7 +205,8 @@ export async function getPdfBundle(paperId, preferredAttachmentId = null) {
     ...document,
     pages,
     ocrPages,
-    annotations: annotationRow?.items || []
+    annotations: annotationRow?.items || [],
+    workspaceNote: workspaceRow?.note || { text: '', images: [], updatedAt: null }
   };
 }
 
@@ -203,6 +216,20 @@ export async function putPdfAnnotations(paperId, attachmentId, annotations) {
       attachmentId,
       paperId,
       items: Array.isArray(annotations) ? annotations : []
+    });
+  });
+}
+
+export async function putPdfWorkspaceNote(paperId, attachmentId, note) {
+  await transactionResult([WORKSPACE_STORE], 'readwrite', stores => {
+    stores[WORKSPACE_STORE].put({
+      attachmentId,
+      paperId,
+      note: {
+        text: String(note?.text || ''),
+        images: Array.isArray(note?.images) ? note.images : [],
+        updatedAt: note?.updatedAt || new Date().toISOString()
+      }
     });
   });
 }
@@ -234,17 +261,18 @@ export async function deletePdfAttachment(paperId, attachmentId = null) {
   const document = await documentForPaper(paperId, attachmentId);
   if (!document) return;
   const id = document.attachmentId;
-  await transactionResult([DOCUMENT_STORE, TEXT_STORE, ANNOTATION_STORE, LEGACY_STORE], 'readwrite', stores => {
+  await transactionResult([DOCUMENT_STORE, TEXT_STORE, ANNOTATION_STORE, WORKSPACE_STORE, LEGACY_STORE], 'readwrite', stores => {
     stores[DOCUMENT_STORE].delete(id);
     stores[TEXT_STORE].delete(IDBKeyRange.bound([id, 0], [id, Number.MAX_SAFE_INTEGER]));
     stores[ANNOTATION_STORE].delete(id);
+    stores[WORKSPACE_STORE].delete(id);
     if (!attachmentId || id === `primary:${paperId}`) stores[LEGACY_STORE].delete(paperId);
   });
 }
 
 export async function deleteAllPdfAttachments(paperId) {
-  const removed = { documents: 0, textPages: 0, annotations: 0, importJobs: 0 };
-  await transactionResult([DOCUMENT_STORE, TEXT_STORE, ANNOTATION_STORE, IMPORT_STORE, LEGACY_STORE], 'readwrite', stores => {
+  const removed = { documents: 0, textPages: 0, annotations: 0, workspaceNotes: 0, importJobs: 0 };
+  await transactionResult([DOCUMENT_STORE, TEXT_STORE, ANNOTATION_STORE, WORKSPACE_STORE, IMPORT_STORE, LEGACY_STORE], 'readwrite', stores => {
     const deleteByPaper = (store, counter) => {
       const request = store.index('paperId').openCursor(IDBKeyRange.only(paperId));
       request.onsuccess = event => {
@@ -258,6 +286,7 @@ export async function deleteAllPdfAttachments(paperId) {
     deleteByPaper(stores[DOCUMENT_STORE], 'documents');
     deleteByPaper(stores[TEXT_STORE], 'textPages');
     deleteByPaper(stores[ANNOTATION_STORE], 'annotations');
+    deleteByPaper(stores[WORKSPACE_STORE], 'workspaceNotes');
     const jobs = stores[IMPORT_STORE].openCursor();
     jobs.onsuccess = event => {
       const cursor = event.target.result;
@@ -279,7 +308,7 @@ export async function movePdfAttachment(sourcePaperId, targetPaperId, attachment
   if (!bundle) return null;
   bundle.paperId = targetPaperId;
   bundle.primary = primary;
-  await transactionResult([DOCUMENT_STORE, TEXT_STORE, ANNOTATION_STORE, LEGACY_STORE], 'readwrite', stores => {
+  await transactionResult([DOCUMENT_STORE, TEXT_STORE, ANNOTATION_STORE, WORKSPACE_STORE, LEGACY_STORE], 'readwrite', stores => {
     if (primary) {
       const cursorRequest = stores[DOCUMENT_STORE].index('paperId').openCursor(IDBKeyRange.only(targetPaperId));
       cursorRequest.onsuccess = event => {
@@ -318,6 +347,11 @@ export async function movePdfAttachment(sourcePaperId, targetPaperId, attachment
       attachmentId: bundle.attachmentId,
       paperId: targetPaperId,
       items: Array.isArray(bundle.annotations) ? bundle.annotations : []
+    });
+    stores[WORKSPACE_STORE].put({
+      attachmentId: bundle.attachmentId,
+      paperId: targetPaperId,
+      note: bundle.workspaceNote || { text: '', images: [], updatedAt: null }
     });
     if (bundle.attachmentId === `primary:${sourcePaperId}`) stores[LEGACY_STORE].delete(sourcePaperId);
   });
