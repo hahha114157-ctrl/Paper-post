@@ -36,7 +36,7 @@ import {
   segmentReaderText
 } from './ui-logic.js';
 
-const APP_VERSION = '6.8.0';
+const APP_VERSION = '6.9.0';
 const STORAGE_KEY = 'paperscope-library-v4';
 const V3_STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
@@ -50,6 +50,7 @@ const LEGACY_TRANSLATION_CACHE_KEY = 'paperscope-translation-cache-v1';
 const PDF_VIEW_MODE_KEY = 'paperscope-pdf-view-mode-v1';
 const PDF_INSPECTOR_OPEN_KEY = 'paperscope-pdf-inspector-open-v1';
 const PDF_INSPECTOR_TAB_KEY = 'paperscope-pdf-inspector-tab-v1';
+const PDF_PANE_WIDTH_KEY = 'paperscope-pdf-pane-width-v1';
 const UI_SETTINGS_KEY = 'paperscope-ui-settings-v1';
 const initialPdfInspectorSetting = localStorage.getItem(PDF_INSPECTOR_OPEN_KEY);
 const TRANSLATION_DEFAULTS = {
@@ -94,7 +95,9 @@ const state = {
   pdfModule: null, pdfLibModule: null, tesseractModule: null, ocrWorker: null,
   pdfLoadingTask: null, pdfDocument: null, pdfRecord: null, pdfPaperId: null, pdfPage: 1, pdfScale: 1.4, pdfRenderTask: null,
   pdfTextContent: null, pdfSelection: null, pdfAnnotationMode: null, pdfAnnotationDraft: null, pdfTextSelectionDraft: null, pdfBrowseSelection: null, pdfSuppressWordClick: false, pdfAnnotationHistory: [], libraryPdfMatches: null,
-  pdfSnapshots: [], pdfSnapshotDrag: null, pdfSnapshotZ: 45, pdfNoteSaveTimer: null, pdfNoteDirty: false,
+  pdfSnapshots: [], pdfSnapshotDrag: null, pdfSnapshotZ: 45, pdfNoteSaveTimer: null, pdfNoteDirty: false, pdfNoteRange: null,
+  pdfPaneWidth: Number(localStorage.getItem(PDF_PANE_WIDTH_KEY)) || null, pdfPaneResize: null,
+  pdfSearchQuery: '', pdfSearchMatches: [], pdfSearchIndex: -1,
   pdfViewMode: localStorage.getItem(PDF_VIEW_MODE_KEY) === 'paged' ? 'paged' : 'continuous',
   pdfInspectorOpen: initialPdfInspectorSetting === null ? matchMedia('(min-width:1100px)').matches : initialPdfInspectorSetting === 'open',
   pdfInspectorTab: localStorage.getItem(PDF_INSPECTOR_TAB_KEY) === 'notes' ? 'notes' : 'annotations',
@@ -703,7 +706,17 @@ function renderNewsCard(item, group, index) {
   const image = safeUrl(item.image || '');
   const hasImage = image !== '#';
   const context = item.summary || `来自 ${cleanNewsSource(item.source)} 官方频道的研究动态。`;
-  return `<a class="news-card ${index === 0 ? 'featured' : ''}" href="${escapeHtml(safeUrl(item.link))}" target="_blank" rel="noopener"><div class="news-meta"><span class="news-source">${escapeHtml(cleanNewsSource(item.source))}</span><span class="news-official">官方</span><time class="news-date">${escapeHtml(dateText(item.published))}</time></div><h3 data-translatable>${escapeHtml(item.title)}</h3><p>${escapeHtml(context)}</p><div class="news-extra"><div class="news-extra-inner"><div class="news-extra-content ${hasImage ? '' : 'no-image'}">${hasImage ? `<img src="${escapeHtml(image)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}<div><strong>补充信息</strong><span>${escapeHtml(context.slice(0, 300))}</span></div></div></div></div><div class="news-card-footer"><span>${escapeHtml(group.label)}</span><span>查看原文 ↗</span></div></a>`;
+  const signalText = `${item.title} ${context}`;
+  const readingCue = /safety|secure|risk|eval|benchmark|安全|评测/i.test(signalText)
+    ? '阅读时重点核对评测边界、风险结论与适用条件。'
+    : /gpu|chip|accelerat|infrastructure|cloud|system|英伟达|芯片|系统/i.test(signalText)
+      ? '阅读时重点关注基础设施、性能效率与部署约束。'
+      : /agent|reason|model|multimodal|智能体|推理|模型|多模态/i.test(signalText)
+        ? '阅读时重点关注能力变化、实验依据和可复用的方法。'
+        : '可结合发布日期与专题分组判断是否值得进一步精读。';
+  const source = cleanNewsSource(item.source);
+  const detail = `${source} 官方频道 · ${dateText(item.published)} · 归入“${group.label}”。${readingCue}`;
+  return `<a class="news-card ${index === 0 ? 'featured' : ''}" href="${escapeHtml(safeUrl(item.link))}" target="_blank" rel="noopener"><div class="news-meta"><span class="news-source">${escapeHtml(source)}</span><span class="news-official">官方</span><time class="news-date">${escapeHtml(dateText(item.published))}</time></div><h3 data-translatable>${escapeHtml(item.title)}</h3><p>${escapeHtml(context)}</p><div class="news-extra"><div class="news-extra-inner"><div class="news-extra-content ${hasImage ? '' : 'no-image'}">${hasImage ? `<img src="${escapeHtml(image)}" alt="${escapeHtml(item.title)} 的官方预览图" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}<div><strong>阅读线索</strong><span>${escapeHtml(detail)}</span></div></div></div></div><div class="news-card-footer"><span>${escapeHtml(group.label)}</span><span>查看原文 ↗</span></div></a>`;
 }
 function renderNewsPage(route) {
   const q = route.query.q || ''; const source = route.query.source || 'all'; const size = Number(route.query.size) === 18 ? 18 : 9; const page = Math.max(1, Number(route.query.page || 1));
@@ -858,7 +871,7 @@ async function exportCompleteBackup() {
         attachmentId: document.attachmentId,
         pageCount: document.pageCount,
         annotations: bundle?.annotations || [],
-        workspaceNote: bundle?.workspaceNote || { text: '', images: [], updatedAt: null }
+        workspaceNote: bundle?.workspaceNote || { html: '', text: '', images: [], updatedAt: null }
       }, null, 2));
       manifest.push({ paperId: document.paperId, attachmentId: document.attachmentId, fileName: document.fileName, backupFile: `${stem}.pdf`, fingerprint: document.fingerprint });
     }
@@ -986,6 +999,7 @@ function storedPdfDefaults(stored) {
   stored.pages ||= Array.from({ length: stored.pageCount || 0 }, () => '');
   stored.annotations ||= [];
   stored.workspaceNote = {
+    html: String(stored.workspaceNote?.html || '').slice(0, 12_000_000),
     text: String(stored.workspaceNote?.text || '').slice(0, 200_000),
     images: Array.isArray(stored.workspaceNote?.images) ? stored.workspaceNote.images.filter(item => item?.id && /^data:image\//.test(item.dataUrl || '')).slice(0, 12) : [],
     updatedAt: stored.workspaceNote?.updatedAt || null
@@ -1086,7 +1100,7 @@ async function parseAndStorePdf(file, paperId, { attachmentId = null, preserveAn
       pageCount: pdf.numPages,
       pages,
       annotations: previous?.annotations || [],
-      workspaceNote: previous?.workspaceNote || { text: '', images: [], updatedAt: null },
+      workspaceNote: previous?.workspaceNote || { html: '', text: '', images: [], updatedAt: null },
       ocrPages: {},
       extractionErrors,
       metadata: { title: metadata.info?.Title || '', author: metadata.info?.Author || '', subject: metadata.info?.Subject || '' },
@@ -1339,7 +1353,7 @@ async function openPdfReader(paperId) {
     el('pdf-view-mode').value = state.pdfViewMode;
     el('pdf-title').textContent = getPaper(paperId)?.title || stored.fileName;
     el('pdf-meta').textContent = `${stored.fileName} · ${(stored.size / 1024 / 1024).toFixed(1)} MB · 本机存储 · ${stored.annotations.length} 条标注`;
-    el('pdf-search-input').value = ''; el('pdf-search-results').classList.add('hidden'); el('pdf-search-results').innerHTML = '';
+    clearPdfSearch();
     el('pdf-modal').classList.add('open');
     state.pdfNoteDirty = false;
     renderPdfWorkspaceNote();
@@ -1582,14 +1596,14 @@ async function renderPdfContinuousPages() {
   updatePdfCurrentPage(state.pdfPage, { save: false });
   updatePdfAnnotationMode();
 }
-async function goToPdfPage(pageNumber) {
+async function goToPdfPage(pageNumber, { behavior = 'smooth' } = {}) {
   if (!state.pdfDocument) return;
   state.pdfPage = Math.max(1, Math.min(state.pdfDocument.numPages, Number(pageNumber) || 1));
   if (state.pdfViewMode === 'continuous') {
     const stack = pdfStackForPage(state.pdfPage);
     if (stack) {
       await renderPdfContinuousStack(stack);
-      el('pdf-canvas-stage').scrollTo({ top: Math.max(0, stack.offsetTop - 24), behavior: 'smooth' });
+      el('pdf-canvas-stage').scrollTo({ top: Math.max(0, stack.offsetTop - 24), behavior });
       updatePdfCurrentPage(state.pdfPage);
     }
   } else await renderPdfPage();
@@ -1621,10 +1635,29 @@ function renderPdfAnnotationLayer(viewport, pageNumber = state.pdfPage, layer = 
   }
   layer.classList.toggle('drawing', ['area', 'area-note', 'snapshot'].includes(state.pdfAnnotationMode));
   layer.classList.toggle('snapshot', state.pdfAnnotationMode === 'snapshot');
+  renderPdfSearchHighlightsForStack(layer.closest('[data-pdf-page-stack]'));
 }
 function annotationTypeLabel(type) { return type === 'highlight' ? '高亮' : type === 'underline' ? '下划线' : type === 'note' ? '批注' : '区域'; }
 function preferredReaderControlsPlacement() {
   return 'sidebar';
+}
+function pdfPaneWidthBounds() {
+  const readerWidth = el('pdf-reader')?.getBoundingClientRect().width || innerWidth;
+  return { min: 220, max: Math.max(220, Math.min(520, Math.floor(readerWidth * .48))) };
+}
+function defaultPdfPaneWidth() { return uiSettings.readerPane === 'wide' ? 320 : 270; }
+function applyPdfPaneWidth(value = state.pdfPaneWidth || defaultPdfPaneWidth(), { save = false } = {}) {
+  const reader = el('pdf-reader'); const resizer = el('pdf-pane-resizer');
+  if (!reader || !resizer) return;
+  const bounds = pdfPaneWidthBounds();
+  const width = Math.round(Math.max(bounds.min, Math.min(bounds.max, Number(value) || defaultPdfPaneWidth())));
+  state.pdfPaneWidth = width;
+  reader.style.setProperty('--reader-pane-width', `${width}px`);
+  resizer.setAttribute('aria-valuemin', String(bounds.min));
+  resizer.setAttribute('aria-valuemax', String(bounds.max));
+  resizer.setAttribute('aria-valuenow', String(width));
+  resizer.title = `阅读侧栏 ${width}px · 拖动或方向键调整，双击恢复`;
+  if (save) localStorage.setItem(PDF_PANE_WIDTH_KEY, String(width));
 }
 function placePdfReaderControls() {
   const config = el('pdf-toolbar-config'); const topSlot = el('pdf-toolbar-controls-slot'); const sideSlot = el('pdf-sidebar-controls-slot');
@@ -1638,11 +1671,13 @@ function syncPdfReaderPreferences() {
   document.documentElement.dataset.readerPane = uiSettings.readerPane === 'wide' ? 'wide' : 'standard';
   document.documentElement.dataset.noteFont = uiSettings.noteFont === 'large' ? 'large' : 'standard';
   placePdfReaderControls();
+  applyPdfPaneWidth();
 }
 function applyPdfInspectorState() {
-  const pane = el('pdf-text-pane'); const reader = el('pdf-reader'); const toggle = el('pdf-inspector-toggle');
+  const pane = el('pdf-text-pane'); const reader = el('pdf-reader'); const toggle = el('pdf-inspector-toggle'); const resizer = el('pdf-pane-resizer');
   if (!pane || !reader || !toggle) return;
   pane.classList.toggle('hidden', !state.pdfInspectorOpen);
+  resizer?.classList.toggle('hidden', !state.pdfInspectorOpen);
   reader.classList.toggle('inspector-hidden', !state.pdfInspectorOpen);
   toggle.setAttribute('aria-expanded', String(state.pdfInspectorOpen));
   document.querySelectorAll('[data-pdf-pane-tab]').forEach(button => {
@@ -1652,12 +1687,18 @@ function applyPdfInspectorState() {
   el('pdf-pane-annotations').classList.toggle('hidden', state.pdfInspectorTab !== 'annotations');
   el('pdf-pane-notes').classList.toggle('hidden', state.pdfInspectorTab !== 'notes');
   placePdfReaderControls();
+  applyPdfPaneWidth();
 }
 function setPdfInspector(open, tab = state.pdfInspectorTab) {
   state.pdfInspectorOpen = Boolean(open);
   state.pdfInspectorTab = tab === 'notes' ? 'notes' : 'annotations';
   localStorage.setItem(PDF_INSPECTOR_OPEN_KEY, state.pdfInspectorOpen ? 'open' : 'closed');
   localStorage.setItem(PDF_INSPECTOR_TAB_KEY, state.pdfInspectorTab);
+  if (state.pdfInspectorTab === 'notes') {
+    document.querySelector('.pdf-export-menu')?.removeAttribute('open');
+    el('pdf-search-results')?.classList.add('hidden');
+    requestAnimationFrame(() => el('pdf-workspace-editor')?.focus({ preventScroll: true }));
+  }
   applyPdfInspectorState();
 }
 function renderPdfAnnotationList(selectedId = null) {
@@ -1682,25 +1723,126 @@ const PDF_NOTE_MAX_IMAGES = 12;
 const PDF_NOTE_MAX_BYTES = 8 * 1024 * 1024;
 function currentPdfWorkspaceNote() {
   if (!state.pdfRecord) return null;
-  state.pdfRecord.workspaceNote ||= { text: '', images: [], updatedAt: null };
+  state.pdfRecord.workspaceNote ||= { html: '', text: '', images: [], updatedAt: null };
   return state.pdfRecord.workspaceNote;
 }
+function sanitizePdfWorkspaceHtml(html = '') {
+  const source = document.createElement('template'); const output = document.createElement('div');
+  source.innerHTML = String(html || '').slice(0, 12_000_000);
+  const allowed = new Set(['P', 'DIV', 'BR', 'STRONG', 'B', 'EM', 'I', 'U', 'UL', 'OL', 'LI', 'BLOCKQUOTE', 'H2', 'H3', 'FIGURE', 'FIGCAPTION', 'IMG']);
+  let imageCount = 0; let textCount = 0;
+  const clean = node => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const value = String(node.textContent || '').slice(0, Math.max(0, 200_000 - textCount));
+      textCount += value.length;
+      return document.createTextNode(value);
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return document.createDocumentFragment();
+    if (node.tagName === 'IMG') {
+      const src = String(node.getAttribute('src') || '');
+      if (!/^data:image\/(?:png|jpe?g|webp|gif);base64,/i.test(src) || imageCount >= PDF_NOTE_MAX_IMAGES) return document.createDocumentFragment();
+      imageCount += 1;
+      const image = document.createElement('img');
+      image.src = src; image.alt = String(node.getAttribute('alt') || '阅读笔记图片').slice(0, 120);
+      image.className = 'pdf-note-inline-image';
+      return image;
+    }
+    const fragment = document.createDocumentFragment();
+    if (!allowed.has(node.tagName)) {
+      [...node.childNodes].forEach(child => fragment.append(clean(child)));
+      return fragment;
+    }
+    const element = document.createElement(node.tagName.toLowerCase());
+    if (node.tagName === 'FIGURE') {
+      element.className = 'pdf-note-figure';
+      element.dataset.pdfNoteImage = String(node.dataset.pdfNoteImage || `note-image-${Date.now()}-${imageCount}`).slice(0, 120);
+    }
+    [...node.childNodes].forEach(child => element.append(clean(child)));
+    return element;
+  };
+  [...source.content.childNodes].forEach(node => output.append(clean(node)));
+  return output.innerHTML;
+}
+function legacyPdfWorkspaceHtml(note) {
+  const root = document.createElement('div');
+  const text = String(note?.text || '');
+  if (text) {
+    text.split(/\n/).forEach(line => {
+      const paragraph = document.createElement('p');
+      if (line) paragraph.textContent = line; else paragraph.append(document.createElement('br'));
+      root.append(paragraph);
+    });
+  }
+  for (const image of Array.isArray(note?.images) ? note.images : []) {
+    if (!/^data:image\//.test(image?.dataUrl || '')) continue;
+    const figure = document.createElement('figure'); figure.className = 'pdf-note-figure';
+    figure.dataset.pdfNoteImage = String(image.id || `note-image-${Date.now()}`);
+    const img = document.createElement('img'); img.src = image.dataUrl; img.alt = String(image.name || '阅读笔记图片');
+    const caption = document.createElement('figcaption'); caption.textContent = image.name || '阅读笔记图片';
+    figure.append(img, caption); root.append(figure);
+  }
+  return sanitizePdfWorkspaceHtml(root.innerHTML);
+}
+function pdfWorkspaceDocumentHtml(note = currentPdfWorkspaceNote()) {
+  if (!note) return '';
+  return sanitizePdfWorkspaceHtml(note.html || legacyPdfWorkspaceHtml(note));
+}
+function decoratePdfWorkspaceEditor(editor = el('pdf-workspace-editor')) {
+  if (!editor) return;
+  for (const image of [...editor.querySelectorAll('img')]) {
+    if (!image.closest('figure')) {
+      const figure = document.createElement('figure'); figure.className = 'pdf-note-figure';
+      figure.dataset.pdfNoteImage = crypto.randomUUID ? crypto.randomUUID() : `note-image-${Date.now()}`;
+      image.replaceWith(figure); figure.append(image);
+    }
+  }
+  for (const figure of editor.querySelectorAll('figure')) {
+    figure.className = 'pdf-note-figure';
+    figure.dataset.pdfNoteImage ||= crypto.randomUUID ? crypto.randomUUID() : `note-image-${Date.now()}`;
+    figure.contentEditable = 'false';
+    if (!figure.querySelector('figcaption')) {
+      const caption = document.createElement('figcaption');
+      caption.textContent = figure.querySelector('img')?.alt || '阅读笔记图片';
+      figure.append(caption);
+    }
+    if (!figure.querySelector('[data-pdf-note-image-action="delete"]')) {
+      const remove = document.createElement('button'); remove.type = 'button';
+      remove.dataset.pdfNoteImageAction = 'delete'; remove.textContent = '删除';
+      figure.append(remove);
+    }
+  }
+}
+function pdfWorkspaceImageElements() {
+  return [...(el('pdf-workspace-editor')?.querySelectorAll('img[src^="data:image/"]') || [])];
+}
 function pdfNoteDataBytes(note = currentPdfWorkspaceNote()) {
-  return (note?.images || []).reduce((total, image) => total + Math.ceil(String(image.dataUrl || '').length * .75), 0);
+  const html = note?.html || legacyPdfWorkspaceHtml(note);
+  const template = document.createElement('template'); template.innerHTML = html;
+  return [...template.content.querySelectorAll('img[src^="data:image/"]')].reduce((total, image) => total + Math.ceil(String(image.getAttribute('src') || '').length * .75), 0);
+}
+function renderPdfNoteStatus(note = currentPdfWorkspaceNote(), prefix = '') {
+  const status = el('pdf-note-status'); if (!status || !note) return;
+  const count = pdfWorkspaceImageElements().length;
+  const saved = note.updatedAt ? `已保存 ${dateText(note.updatedAt, true)}` : '尚未保存';
+  status.textContent = `${prefix || saved} · ${count}/${PDF_NOTE_MAX_IMAGES} 张 · ${(pdfNoteDataBytes(note) / 1024 / 1024).toFixed(1)} MB`;
 }
 function renderPdfWorkspaceNote() {
-  const note = currentPdfWorkspaceNote(); const editor = el('pdf-workspace-editor'); const gallery = el('pdf-note-images');
-  if (!note || !editor || !gallery) return;
-  editor.textContent = note.text || '';
-  gallery.innerHTML = note.images.length ? note.images.map((image, index) => `<article class="pdf-note-image" data-pdf-note-image="${escapeHtml(image.id)}"><img src="${escapeHtml(image.dataUrl)}" alt="${escapeHtml(image.name || `笔记图片 ${index + 1}`)}"><footer><span>${escapeHtml(image.name || `图片 ${index + 1}`)} · ${escapeHtml(dateText(image.createdAt))}</span><button type="button" data-pdf-note-image-action="delete">删除</button></footer></article>`).join('') : '<div class="panel-note">还没有图片。可插入本机图片，也可把框选截图直接存入笔记。</div>';
-  el('pdf-note-status').textContent = note.updatedAt
-    ? `已保存 ${dateText(note.updatedAt, true)} · ${note.images.length}/${PDF_NOTE_MAX_IMAGES} 张 · ${(pdfNoteDataBytes(note) / 1024 / 1024).toFixed(1)} MB`
-    : `文字与图片保存在当前浏览器；最多 ${PDF_NOTE_MAX_IMAGES} 张图片、约 8 MB。`;
+  const note = currentPdfWorkspaceNote(); const editor = el('pdf-workspace-editor');
+  if (!note || !editor) return;
+  note.html = pdfWorkspaceDocumentHtml(note); note.images = [];
+  editor.innerHTML = note.html;
+  decoratePdfWorkspaceEditor(editor);
+  renderPdfNoteStatus(note);
 }
 function updatePdfWorkspaceTextFromEditor() {
   const note = currentPdfWorkspaceNote(); const editor = el('pdf-workspace-editor');
   if (!note || !editor) return;
-  note.text = String(editor.innerText || editor.textContent || '').replace(/\u00a0/g, ' ').slice(0, 200_000);
+  const clone = editor.cloneNode(true);
+  clone.querySelectorAll('[data-pdf-note-image-action]').forEach(node => node.remove());
+  clone.querySelectorAll('[contenteditable]').forEach(node => node.removeAttribute('contenteditable'));
+  note.html = sanitizePdfWorkspaceHtml(clone.innerHTML);
+  note.text = String(clone.textContent || '').replace(/\u00a0/g, ' ').slice(0, 200_000);
+  note.images = [];
   state.pdfNoteDirty = true;
 }
 async function savePdfWorkspaceNote({ quiet = false } = {}) {
@@ -1712,7 +1854,7 @@ async function savePdfWorkspaceNote({ quiet = false } = {}) {
   try {
     await persistPdfRecord('workspace');
     state.pdfNoteDirty = false;
-    if (state.pdfRecord && el('pdf-note-status')) el('pdf-note-status').textContent = `已保存刚刚 · ${note.images.length}/${PDF_NOTE_MAX_IMAGES} 张 · ${(pdfNoteDataBytes(note) / 1024 / 1024).toFixed(1)} MB`;
+    if (state.pdfRecord) renderPdfNoteStatus(note, '已保存刚刚');
     if (!quiet) toast('阅读笔记已保存');
   } catch (error) {
     if (el('pdf-note-status')) el('pdf-note-status').textContent = '保存失败，请导出笔记后重试';
@@ -1724,6 +1866,64 @@ function schedulePdfWorkspaceSave() {
   if (el('pdf-note-status')) el('pdf-note-status').textContent = '内容有修改，正在自动保存…';
   clearTimeout(state.pdfNoteSaveTimer);
   state.pdfNoteSaveTimer = setTimeout(() => savePdfWorkspaceNote({ quiet: true }), 650);
+}
+function rememberPdfWorkspaceRange() {
+  const editor = el('pdf-workspace-editor'); const selection = window.getSelection();
+  if (!editor || !selection?.rangeCount) return;
+  const range = selection.getRangeAt(0);
+  const container = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+  if (container && editor.contains(container)) state.pdfNoteRange = range.cloneRange();
+}
+function restorePdfWorkspaceRange() {
+  const editor = el('pdf-workspace-editor'); const selection = window.getSelection();
+  if (!editor || !selection) return null;
+  let range = state.pdfNoteRange;
+  const container = range?.commonAncestorContainer?.nodeType === Node.ELEMENT_NODE ? range.commonAncestorContainer : range?.commonAncestorContainer?.parentElement;
+  if (!range || !container || !editor.contains(container)) {
+    range = document.createRange(); range.selectNodeContents(editor); range.collapse(false);
+  }
+  selection.removeAllRanges(); selection.addRange(range); return range;
+}
+function insertPdfWorkspaceFigure(image) {
+  const editor = el('pdf-workspace-editor'); if (!editor) return;
+  editor.focus({ preventScroll: true });
+  const range = restorePdfWorkspaceRange();
+  const figure = document.createElement('figure'); figure.className = 'pdf-note-figure';
+  figure.dataset.pdfNoteImage = image.id; figure.contentEditable = 'false';
+  const img = document.createElement('img'); img.src = image.dataUrl; img.alt = image.name || '阅读笔记图片';
+  const caption = document.createElement('figcaption'); caption.textContent = image.name || '阅读笔记图片';
+  const remove = document.createElement('button'); remove.type = 'button'; remove.dataset.pdfNoteImageAction = 'delete'; remove.textContent = '删除';
+  figure.append(img, caption, remove);
+  range.deleteContents(); range.collapse(true);
+  const anchor = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
+  const block = anchor?.closest?.('p,div,h2,h3,blockquote,li');
+  let paragraph = document.createElement(block?.tagName === 'H2' || block?.tagName === 'H3' ? block.tagName.toLowerCase() : 'p');
+  if (range.startContainer.nodeType === Node.TEXT_NODE && range.startContainer.parentElement === editor) {
+    const tail = range.startContainer.splitText(range.startOffset);
+    const before = document.createElement('p'); editor.insertBefore(before, range.startContainer); before.append(range.startContainer);
+    paragraph.append(tail);
+    if (!paragraph.textContent) paragraph.append(document.createElement('br'));
+    before.after(figure, paragraph);
+  } else if (block?.tagName === 'LI' && editor.contains(block)) {
+    range.insertNode(paragraph); range.insertNode(figure);
+  } else if (block && block !== editor && editor.contains(block)) {
+    const tailRange = document.createRange();
+    try {
+      tailRange.setStart(range.startContainer, range.startOffset);
+      tailRange.setEnd(block, block.childNodes.length);
+      const tail = tailRange.extractContents();
+      paragraph.append(tail);
+      if (!paragraph.textContent && !paragraph.querySelector('img,br')) paragraph.append(document.createElement('br'));
+      block.after(figure, paragraph);
+    } catch {
+      paragraph.append(document.createElement('br')); editor.append(figure, paragraph);
+    }
+  } else {
+    paragraph.append(document.createElement('br')); editor.append(figure, paragraph);
+  }
+  const nextRange = document.createRange(); nextRange.selectNodeContents(paragraph); nextRange.collapse(true);
+  const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(nextRange);
+  state.pdfNoteRange = nextRange.cloneRange();
 }
 function blobDataUrl(blob) {
   return new Promise((resolve, reject) => {
@@ -1748,14 +1948,15 @@ async function compressedPdfNoteImage(blob, name = '阅读截图') {
 }
 async function addPdfWorkspaceImage(blob, name) {
   const note = currentPdfWorkspaceNote(); if (!note) return toast('请先打开一篇 PDF');
-  if (note.images.length >= PDF_NOTE_MAX_IMAGES) return toast(`每篇笔记最多保存 ${PDF_NOTE_MAX_IMAGES} 张图片`);
+  if (pdfWorkspaceImageElements().length >= PDF_NOTE_MAX_IMAGES) return toast(`每篇笔记最多保存 ${PDF_NOTE_MAX_IMAGES} 张图片`);
   try {
     const image = await compressedPdfNoteImage(blob, name);
     if (pdfNoteDataBytes(note) + image.dataUrl.length * .75 > PDF_NOTE_MAX_BYTES) throw new Error('图片笔记已接近 8 MB 上限，请删除旧图或先导出');
-    note.images.push(image); note.updatedAt = new Date().toISOString(); state.pdfNoteDirty = true;
-    setPdfInspector(true, 'notes'); renderPdfWorkspaceNote();
+    setPdfInspector(true, 'notes');
+    insertPdfWorkspaceFigure(image);
+    note.updatedAt = new Date().toISOString(); state.pdfNoteDirty = true;
     await savePdfWorkspaceNote({ quiet: true });
-    toast('图片已插入阅读笔记');
+    toast('图片已插入光标位置，可继续在下方输入文字');
   } catch (error) { toast(error.message || '图片插入失败'); }
 }
 async function addLatestPdfSnapshotToNote() {
@@ -1767,9 +1968,8 @@ async function exportPdfWorkspaceNote() {
   const note = currentPdfWorkspaceNote(); if (!note) return;
   await savePdfWorkspaceNote({ quiet: true });
   const title = getPaper(state.pdfPaperId)?.title || state.pdfRecord?.fileName || '阅读笔记';
-  const paragraphs = escapeHtml(note.text || '').replace(/\n/g, '<br>');
-  const images = note.images.map(image => `<figure><img src="${image.dataUrl}" alt="${escapeHtml(image.name)}"><figcaption>${escapeHtml(image.name)}</figcaption></figure>`).join('');
-  const documentHtml = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · 阅读笔记</title><style>body{max-width:900px;margin:40px auto;padding:0 24px;font:16px/1.75 system-ui;color:#18231e}h1{font-size:26px}main{white-space:normal}figure{margin:24px 0}img{max-width:100%;height:auto;border:1px solid #dde5df;border-radius:8px}figcaption{color:#6d7b73;font-size:12px}</style><h1>${escapeHtml(title)}</h1><p>导出时间：${escapeHtml(new Date().toLocaleString('zh-CN'))}</p><main>${paragraphs || '<em>暂无文字笔记</em>'}${images}</main></html>`;
+  const content = pdfWorkspaceDocumentHtml(note);
+  const documentHtml = `<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)} · 阅读笔记</title><style>body{max-width:900px;margin:40px auto;padding:0 24px;font:16px/1.75 system-ui;color:#18231e}h1{font-size:26px}main{white-space:normal}figure{margin:24px 0}img{display:block;max-width:100%;height:auto;border:1px solid #dde5df;border-radius:8px}figcaption{color:#6d7b73;font-size:12px}</style><h1>${escapeHtml(title)}</h1><p>导出时间：${escapeHtml(new Date().toLocaleString('zh-CN'))}</p><main>${content || '<em>暂无阅读笔记</em>'}</main></html>`;
   downloadText(`${safePdfFileStem(state.pdfRecord?.fileName || title)}-阅读笔记.html`, documentHtml, 'text/html');
   toast('阅读笔记已导出');
 }
@@ -2574,20 +2774,154 @@ function closePdfReader() {
   if (state.pdfRecord && state.pdfNoteDirty) savePdfWorkspaceNote({ quiet: true }).catch(() => {});
   state.pdfRenderTask?.cancel(); state.pdfRenderTask = null;
   clearPdfPageObservers(); cancelPdfAnnotationInteraction({ quiet: true });
+  clearPdfSearch();
   state.pdfLoadingTask?.destroy().catch(() => {});
   state.pdfLoadingTask = null; state.pdfDocument = null; state.pdfRecord = null; state.pdfPaperId = null; state.pdfTextContent = null; state.pdfSelection = null; state.pdfAnnotationMode = null;
 }
-function searchPdfText() {
-  const query = el('pdf-search-input').value.trim().toLowerCase();
-  const container = el('pdf-search-results');
-  if (!query) { container.classList.add('hidden'); container.innerHTML = ''; return; }
-  const matches = (state.pdfRecord?.pages || []).map((text, index) => ({ text, page: index + 1, position: text.toLowerCase().indexOf(query) })).filter(item => item.position >= 0).slice(0, 40);
-  container.innerHTML = matches.length ? matches.map(item => {
-    const start = Math.max(0, item.position - 60); const excerpt = item.text.slice(start, item.position + query.length + 100).replace(/\s+/g, ' ');
-    return `<button data-pdf-page="${item.page}"><b>第 ${item.page} 页</b><br>${escapeHtml(excerpt)}</button>`;
-  }).join('') : '<div class="panel-note">全文中没有找到该关键词。</div>';
+function normalizedPdfSearchText(value = '', withMap = false) {
+  let text = ''; const map = []; let whitespace = false;
+  const source = String(value || '').normalize('NFKC');
+  for (let index = 0; index < source.length; index += 1) {
+    const char = source[index];
+    if (/\s/.test(char)) {
+      if (!text || whitespace) continue;
+      text += ' '; map.push(index); whitespace = true; continue;
+    }
+    const normalized = char.toLocaleLowerCase();
+    for (const part of normalized) { text += part; map.push(index); }
+    whitespace = false;
+  }
+  if (text.endsWith(' ')) { text = text.slice(0, -1); map.pop(); }
+  return withMap ? { text, map } : text;
+}
+function pdfSearchMatchesForPage(text, page, query) {
+  const normalized = normalizedPdfSearchText(text, true); const matches = [];
+  let position = 0;
+  while (query && position <= normalized.text.length - query.length && matches.length < 200) {
+    const found = normalized.text.indexOf(query, position); if (found < 0) break;
+    const start = normalized.map[found] ?? found; const end = (normalized.map[found + query.length - 1] ?? start) + 1;
+    matches.push({ page, start, end, text: String(text || '') });
+    position = found + Math.max(1, query.length);
+  }
+  return matches;
+}
+function pdfSearchExcerpt(match) {
+  const text = String(match.text || '').replace(/\s+/g, ' ');
+  const sourceBefore = String(match.text || '').slice(0, match.start).replace(/\s+/g, ' ');
+  const displayStart = Math.max(0, sourceBefore.length - 52);
+  const hit = String(match.text || '').slice(match.start, match.end).replace(/\s+/g, ' ');
+  const before = text.slice(displayStart, Math.min(text.length, sourceBefore.length));
+  const after = text.slice(Math.min(text.length, sourceBefore.length + hit.length), Math.min(text.length, sourceBefore.length + hit.length + 76));
+  return `${displayStart ? '…' : ''}${escapeHtml(before)}<mark>${escapeHtml(hit)}</mark>${escapeHtml(after)}${sourceBefore.length + hit.length + 76 < text.length ? '…' : ''}`;
+}
+function closePdfSearchResults() { el('pdf-search-results')?.classList.add('hidden'); }
+function clearPdfSearch({ clearInput = true } = {}) {
+  state.pdfSearchQuery = ''; state.pdfSearchMatches = []; state.pdfSearchIndex = -1;
+  if (clearInput && el('pdf-search-input')) el('pdf-search-input').value = '';
+  const container = el('pdf-search-results'); if (container) { container.classList.add('hidden'); container.replaceChildren(); }
+  document.querySelectorAll('.pdf-search-mark').forEach(mark => mark.remove());
+}
+function renderPdfSearchResults() {
+  const container = el('pdf-search-results'); if (!container) return;
+  const matches = state.pdfSearchMatches;
+  const header = `<div class="pdf-search-results-head"><strong>${matches.length ? `${matches.length} 处匹配` : '没有匹配内容'}</strong><button type="button" class="small" data-pdf-search-action="previous" aria-label="上一个匹配">↑</button><button type="button" class="small" data-pdf-search-action="next" aria-label="下一个匹配">↓</button><button type="button" class="small" data-pdf-search-action="close" aria-label="收起搜索结果">×</button></div>`;
+  container.innerHTML = header + (matches.length
+    ? matches.map((match, index) => `<button type="button" class="${index === state.pdfSearchIndex ? 'active' : ''}" data-pdf-search-index="${index}"><b>第 ${match.page} 页 · 第 ${index + 1} 处</b><br>${pdfSearchExcerpt(match)}</button>`).join('')
+    : '<div class="panel-note">请检查关键词，或先对扫描页运行 OCR。</div>');
   container.classList.remove('hidden');
+}
+function pdfTextLayerSearchMap(layer) {
+  const layout = pdfVisualTextLayout(layer); let text = ''; const map = []; let previous = null;
+  const append = (value, node, start) => {
+    for (let index = 0; index < value.length; index += 1) {
+      const char = value[index];
+      if (/\s/.test(char)) {
+        if (!text || text.endsWith(' ')) continue;
+        text += ' '; map.push({ node, offset: start + index }); continue;
+      }
+      const normalized = char.normalize('NFKC').toLocaleLowerCase();
+      for (const part of normalized) { text += part; map.push({ node, offset: start + index }); }
+    }
+  };
+  for (const fragment of layout.fragments) {
+    const changedRun = previous && (fragment.lineIndex !== previous.lineIndex || fragment.runIndex !== previous.runIndex);
+    if (changedRun && text && !text.endsWith(' ') && !/[-/\s]$/.test(previous.text) && !/^[,.;:!?)}\]]/.test(fragment.text)) {
+      text += ' '; map.push({ node: previous.node, offset: previous.end });
+    }
+    append(fragment.text, fragment.node, fragment.start); previous = fragment;
+  }
+  return { text: text.trimEnd(), map, bounds: layout.bounds };
+}
+function pdfSearchRectsForMappedMatch(mapped, start, end) {
+  const groups = [];
+  for (let index = start; index < end; index += 1) {
+    const point = mapped.map[index]; if (!point?.node) continue;
+    const last = groups.at(-1);
+    if (last?.node === point.node && point.offset <= last.end + 1) last.end = Math.max(last.end, point.offset + 1);
+    else groups.push({ node: point.node, start: point.offset, end: point.offset + 1 });
+  }
+  return groups.flatMap(group => {
+    try {
+      const range = document.createRange(); range.setStart(group.node, group.start); range.setEnd(group.node, group.end);
+      return [...range.getClientRects()].filter(rect => rect.width > .15 && rect.height > .5);
+    } catch { return []; }
+  });
+}
+function renderPdfSearchHighlightsForStack(stack) {
+  if (!stack) return;
+  const annotationLayer = stack.querySelector('.pdf-annotation-layer'); const textLayer = stack.querySelector('.textLayer');
+  annotationLayer?.querySelectorAll('.pdf-search-mark').forEach(mark => mark.remove());
+  const query = state.pdfSearchQuery; const page = Number(stack.dataset.page);
+  if (!annotationLayer || !textLayer || !query || !textLayer.querySelector('span')) return;
+  const mapped = pdfTextLayerSearchMap(textLayer); if (!mapped.text) return;
+  const pageMatches = state.pdfSearchMatches.map((match, index) => ({ ...match, index })).filter(match => match.page === page);
+  let position = 0; let occurrence = 0;
+  while (position <= mapped.text.length - query.length && occurrence < 200) {
+    const found = mapped.text.indexOf(query, position); if (found < 0) break;
+    const rects = pdfSearchRectsForMappedMatch(mapped, found, found + query.length);
+    const active = pageMatches[occurrence]?.index === state.pdfSearchIndex;
+    for (const rect of rects) {
+      const mark = document.createElement('i'); mark.className = `pdf-search-mark${active ? ' current' : ''}`;
+      mark.style.left = `${Math.max(0, (rect.left - mapped.bounds.left) / mapped.bounds.width) * 100}%`;
+      mark.style.top = `${Math.max(0, (rect.top - mapped.bounds.top) / mapped.bounds.height) * 100}%`;
+      mark.style.width = `${Math.min(1, rect.width / mapped.bounds.width) * 100}%`;
+      mark.style.height = `${Math.min(1, rect.height / mapped.bounds.height) * 100}%`;
+      annotationLayer.append(mark);
+    }
+    occurrence += 1; position = found + Math.max(1, query.length);
+  }
+}
+async function activatePdfSearchMatch(index, { keepResultsOpen = true } = {}) {
+  const matches = state.pdfSearchMatches; if (!matches.length) return;
+  state.pdfSearchIndex = (Number(index) + matches.length) % matches.length;
+  const match = matches[state.pdfSearchIndex];
+  document.querySelectorAll('.pdf-search-mark.current').forEach(mark => mark.classList.remove('current'));
+  await goToPdfPage(match.page, { behavior: 'auto' });
+  updatePdfCurrentPage(match.page);
+  renderPdfAnnotationLayerForPage(match.page);
+  renderPdfSearchResults();
+  if (!keepResultsOpen) closePdfSearchResults();
+  requestAnimationFrame(() => {
+    pdfStackForPage(match.page)?.querySelector('.pdf-search-mark.current')?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+  });
+}
+function movePdfSearchMatch(direction) {
+  if (!state.pdfSearchMatches.length) return;
+  activatePdfSearchMatch((state.pdfSearchIndex < 0 ? 0 : state.pdfSearchIndex) + direction);
+}
+async function searchPdfText({ advanceIfSame = false } = {}) {
+  const query = normalizedPdfSearchText(el('pdf-search-input').value.trim());
+  if (!query) { clearPdfSearch(); return; }
+  if (advanceIfSame && query === state.pdfSearchQuery && state.pdfSearchMatches.length) {
+    movePdfSearchMatch(1); return;
+  }
+  state.pdfSearchQuery = query;
+  state.pdfSearchMatches = (state.pdfRecord?.pages || []).flatMap((text, index) => pdfSearchMatchesForPage(text, index + 1, query)).slice(0, 200);
+  state.pdfSearchIndex = state.pdfSearchMatches.length ? 0 : -1;
   setPdfInspector(true, 'annotations');
+  renderPdfSearchResults();
+  renderAllPdfAnnotationLayers();
+  if (state.pdfSearchMatches.length) await activatePdfSearchMatch(0);
 }
 async function removeAttachedPdf(paperId) {
   if (!confirm('移除本机保存的 PDF？收藏、笔记和论文元数据会保留。')) return;
@@ -3443,6 +3777,10 @@ document.addEventListener('click', event => {
   const close = event.target.closest('[data-close-modal]'); if (close) return closeModal(close.dataset.closeModal);
 });
 document.addEventListener('click', event => {
+  if (!event.target.closest('.pdf-search-popover')) closePdfSearchResults();
+  if (!event.target.closest('.pdf-export-menu')) document.querySelector('.pdf-export-menu')?.removeAttribute('open');
+});
+document.addEventListener('click', event => {
   if (event.target.closest('#translation-popover')) return;
   const root = event.target.closest('[data-translatable]');
   if (state.pdfSuppressWordClick && root?.classList.contains('textLayer')) return;
@@ -3456,6 +3794,7 @@ document.addEventListener('click', event => {
   const word = wordAtPoint(event.clientX, event.clientY, root); if (word) showTranslation(word.text, word.rect, root, 'word');
 });
 document.addEventListener('selectionchange', () => {
+  rememberPdfWorkspaceRange();
   clearTimeout(state.translationSelectionTimer);
   if (!translationSettings.enabled || !translationSettings.selection) return;
   const selection = window.getSelection();
@@ -3636,14 +3975,77 @@ el('pdf-view-mode').addEventListener('change', async event => {
   toast(state.pdfViewMode === 'continuous' ? '已切换为上下连续滚动' : '已切换为单页翻页');
 });
 el('pdf-zoom').addEventListener('change', async event => { state.pdfScale = Number(event.target.value); await renderPdfPage(); });
-el('pdf-search-button').addEventListener('click', searchPdfText);
-el('pdf-search-input').addEventListener('keydown', event => { if (event.key === 'Enter') searchPdfText(); });
-el('pdf-search-results').addEventListener('click', event => { const button = event.target.closest('[data-pdf-page]'); if (button) goToPdfPage(Number(button.dataset.pdfPage)); });
+el('pdf-search-button').addEventListener('click', () => searchPdfText({ advanceIfSame: true }));
+el('pdf-search-clear').addEventListener('click', () => clearPdfSearch());
+el('pdf-search-input').addEventListener('input', event => { if (!event.currentTarget.value.trim()) clearPdfSearch({ clearInput: false }); });
+el('pdf-search-input').addEventListener('keydown', event => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  if (normalizedPdfSearchText(event.currentTarget.value.trim()) === state.pdfSearchQuery && state.pdfSearchMatches.length) movePdfSearchMatch(event.shiftKey ? -1 : 1);
+  else searchPdfText();
+});
+el('pdf-search-results').addEventListener('click', event => {
+  const action = event.target.closest('[data-pdf-search-action]')?.dataset.pdfSearchAction;
+  if (action === 'close') return closePdfSearchResults();
+  if (action === 'previous') return movePdfSearchMatch(-1);
+  if (action === 'next') return movePdfSearchMatch(1);
+  const button = event.target.closest('[data-pdf-search-index]');
+  if (button) activatePdfSearchMatch(Number(button.dataset.pdfSearchIndex));
+});
 el('pdf-inspector-toggle').addEventListener('click', () => setPdfInspector(!state.pdfInspectorOpen));
 el('pdf-inspector-close').addEventListener('click', () => setPdfInspector(false));
 document.querySelectorAll('[data-pdf-pane-tab]').forEach(button => button.addEventListener('click', () => setPdfInspector(true, button.dataset.pdfPaneTab)));
+el('pdf-pane-resizer').addEventListener('pointerdown', event => {
+  if (event.button !== 0 || matchMedia('(max-width:720px)').matches) return;
+  event.preventDefault();
+  state.pdfPaneResize = { pointerId: event.pointerId, startX: event.clientX, startWidth: state.pdfPaneWidth || defaultPdfPaneWidth() };
+  event.currentTarget.classList.add('dragging'); event.currentTarget.setPointerCapture(event.pointerId);
+});
+el('pdf-pane-resizer').addEventListener('pointermove', event => {
+  const drag = state.pdfPaneResize; if (!drag || drag.pointerId !== event.pointerId) return;
+  applyPdfPaneWidth(drag.startWidth + event.clientX - drag.startX);
+});
+function finishPdfPaneResize(event) {
+  const drag = state.pdfPaneResize; if (!drag || drag.pointerId !== event.pointerId) return;
+  state.pdfPaneResize = null; el('pdf-pane-resizer').classList.remove('dragging');
+  try { el('pdf-pane-resizer').releasePointerCapture(event.pointerId); } catch {}
+  applyPdfPaneWidth(state.pdfPaneWidth, { save: true });
+}
+el('pdf-pane-resizer').addEventListener('pointerup', finishPdfPaneResize);
+el('pdf-pane-resizer').addEventListener('pointercancel', finishPdfPaneResize);
+el('pdf-pane-resizer').addEventListener('dblclick', () => {
+  state.pdfPaneWidth = defaultPdfPaneWidth(); applyPdfPaneWidth(state.pdfPaneWidth, { save: true });
+});
+el('pdf-pane-resizer').addEventListener('keydown', event => {
+  const bounds = pdfPaneWidthBounds();
+  const next = event.key === 'Home' ? bounds.min : event.key === 'End' ? bounds.max
+    : event.key === 'ArrowLeft' ? (state.pdfPaneWidth || defaultPdfPaneWidth()) - 12
+      : event.key === 'ArrowRight' ? (state.pdfPaneWidth || defaultPdfPaneWidth()) + 12 : null;
+  if (next === null) return;
+  event.preventDefault(); applyPdfPaneWidth(next, { save: true });
+});
+addEventListener('resize', () => { if (state.pdfInspectorOpen) applyPdfPaneWidth(); });
 el('pdf-note-save').addEventListener('click', () => savePdfWorkspaceNote());
 el('pdf-workspace-editor').addEventListener('input', schedulePdfWorkspaceSave);
+el('pdf-workspace-editor').addEventListener('keyup', rememberPdfWorkspaceRange);
+el('pdf-workspace-editor').addEventListener('mouseup', rememberPdfWorkspaceRange);
+el('pdf-workspace-editor').addEventListener('click', async event => {
+  if (event.target.closest('[data-pdf-note-image-action]')?.dataset.pdfNoteImageAction !== 'delete') return;
+  const figure = event.target.closest('[data-pdf-note-image]');
+  if (!figure || !confirm('从阅读笔记中删除这张图片？')) return;
+  const paragraph = document.createElement('p'); paragraph.append(document.createElement('br'));
+  figure.replaceWith(paragraph); state.pdfNoteDirty = true;
+  await savePdfWorkspaceNote({ quiet: true });
+});
+el('pdf-pane-notes').querySelector('.pdf-note-toolbar').addEventListener('mousedown', event => {
+  if (event.target.closest('button')) event.preventDefault();
+});
+el('pdf-pane-notes').querySelector('.pdf-note-toolbar').addEventListener('click', event => {
+  const button = event.target.closest('[data-pdf-note-command]'); if (!button) return;
+  el('pdf-workspace-editor').focus({ preventScroll: true }); restorePdfWorkspaceRange();
+  document.execCommand(button.dataset.pdfNoteCommand, false, button.dataset.pdfNoteValue || null);
+  rememberPdfWorkspaceRange(); schedulePdfWorkspaceSave();
+});
 el('pdf-note-add-image').addEventListener('click', () => el('pdf-note-image-file').click());
 el('pdf-note-image-file').addEventListener('change', async event => {
   for (const file of [...event.target.files]) await addPdfWorkspaceImage(file, file.name);
@@ -3651,14 +4053,6 @@ el('pdf-note-image-file').addEventListener('change', async event => {
 });
 el('pdf-note-add-snapshot').addEventListener('click', addLatestPdfSnapshotToNote);
 el('pdf-note-export').addEventListener('click', exportPdfWorkspaceNote);
-el('pdf-note-images').addEventListener('click', async event => {
-  const card = event.target.closest('[data-pdf-note-image]');
-  if (!card || event.target.closest('[data-pdf-note-image-action]')?.dataset.pdfNoteImageAction !== 'delete') return;
-  const note = currentPdfWorkspaceNote(); if (!note || !confirm('从阅读笔记中删除这张图片？')) return;
-  note.images = note.images.filter(image => image.id !== card.dataset.pdfNoteImage);
-  note.updatedAt = new Date().toISOString(); state.pdfNoteDirty = true; renderPdfWorkspaceNote();
-  await savePdfWorkspaceNote({ quiet: true });
-});
 el('pdf-reparse').addEventListener('click', reparsePdfText);
 el('pdf-ocr-page').addEventListener('click', ocrCurrentPdfPage);
 el('pdf-ocr-missing').addEventListener('click', ocrMissingPdfPages);
@@ -3670,6 +4064,9 @@ el('pdf-export-annotated').addEventListener('click', exportAnnotatedPdf);
 el('pdf-export-annotations').addEventListener('click', exportPdfAnnotations);
 el('pdf-import-annotations').addEventListener('click', () => el('pdf-annotations-file').click());
 el('pdf-annotations-file').addEventListener('change', async event => { const [file] = event.target.files; if (file) await importPdfAnnotationsFile(file); event.target.value = ''; });
+document.querySelector('.pdf-export-menu>div').addEventListener('click', event => {
+  if (event.target.closest('button')) document.querySelector('.pdf-export-menu')?.removeAttribute('open');
+});
 el('pdf-pages-container').addEventListener('pointerdown', event => {
   const mode = pdfSelectionToolType(); const layer = event.target.closest('.textLayer');
   // Desktop PDF dragging always uses visual geometry. Tying this to the
