@@ -201,23 +201,137 @@
       .pdf-import-job{grid-template-columns:1fr}.pdf-import-job-actions{justify-content:flex-end}.pdf-import-dropzone{padding:20px 12px}
       .ui-preset-grid,.appearance-controls{grid-template-columns:1fr}
     }
+
+    /* v6.6 information hierarchy and reading workspace */
+    :root{--reader-pane-width:minmax(350px,410px);--content-gap:20px}
+    body{font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;line-height:1.62;letter-spacing:.005em}
+    .app{grid-template-columns:248px minmax(0,1fr)}
+    .sidebar{display:flex;flex-direction:column;padding:24px 16px 18px;background:color-mix(in srgb,var(--card) 97%,var(--soft))}
+    .brand{margin:0 8px 25px;font-size:21px}
+    .nav{display:grid;gap:15px;overflow:auto;padding:0 2px 12px;scrollbar-width:thin}
+    .nav-group{display:grid;gap:3px}
+    .nav-group+.nav-group{padding-top:11px;border-top:1px solid color-mix(in srgb,var(--line) 72%,transparent)}
+    .nav-group-label{padding:0 10px 6px;color:var(--muted);font:700 9px/1.2 ui-monospace,SFMono-Regular,monospace;letter-spacing:.12em;text-transform:uppercase}
+    .nav button{position:relative;min-height:40px;padding:9px 11px;font-size:12px;font-weight:690}
+    .nav button.active:before{content:"";position:absolute;left:0;top:9px;bottom:9px;width:3px;border-radius:3px;background:var(--green)}
+    .nav-icon{width:20px;font-size:14px}
+    .side-bottom{position:static;margin-top:auto}
+    .sync-box{padding:12px 13px;border:1px solid color-mix(in srgb,var(--line) 70%,transparent);background:color-mix(in srgb,var(--soft) 78%,var(--card))}
+    .main{max-width:1440px;padding:0 42px 58px}
+    .topbar{height:76px}
+    .route-name{font-size:11px}.route-name strong{font-size:12px}
+    .page-head{margin:31px 0 20px}.page-head>div:first-child{max-width:780px}
+    h1{font-size:32px;letter-spacing:-1.05px}.subtitle{max-width:720px;font-size:12px;line-height:1.7}
+    .eyebrow{font-size:10px;font-weight:750}
+    .card,.paper-row,.table-wrap{box-shadow:0 10px 28px color-mix(in srgb,var(--ink) 5%,transparent)}
+    .card{border-radius:16px}.card-head{padding:18px 20px 13px}.card-head h2,.card-head h3{font-size:15px}
+    .paper-main h3,.library-row h3{font-size:13.5px}.paper-main p,.library-row p,.preview-paper p,.settings-card p{font-size:11px;line-height:1.65}
+    .tag,.mono,.result-meta,.venue-table th{font-size:10px}.venue-table td{font-size:11px;line-height:1.55}
+    .filterbar{gap:10px;padding:14px 16px;border-radius:13px}.filterbar select,.filterbar input{min-height:36px;font-size:11px}
+    .tabs{gap:7px;padding-top:10px;background:color-mix(in srgb,var(--soft) 42%,var(--card))}.tabs button{padding:7px 12px;font-size:10.5px}
+
+    .news-filterbar{align-items:end}.news-filterbar label{display:grid;gap:5px;color:var(--muted);font-size:10px;font-weight:700}
+    .news-feed{display:grid;gap:25px}
+    .news-cluster{display:grid;gap:12px}
+    .news-cluster-head{display:flex;align-items:end;justify-content:space-between;gap:16px;padding:0 3px 8px;border-bottom:1px solid var(--line)}
+    .news-cluster-head h2{margin:0;font-size:18px;letter-spacing:-.35px}.news-cluster-head p{margin:3px 0 0;color:var(--muted);font-size:11px}
+    .news-cluster-count{flex:0 0 auto;color:var(--green);font:700 10px ui-monospace,SFMono-Regular,monospace}
+    .news-cluster-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+    .news-card{display:flex;min-height:0;flex-direction:column;padding:19px 20px;border-radius:14px;transition:border-color .16s,background .16s,transform .16s}
+    .news-card:hover,.news-card:focus-visible{transform:translateY(-2px);background:color-mix(in srgb,var(--pale) 30%,var(--card))}
+    .news-card.featured{border-color:color-mix(in srgb,var(--green) 38%,var(--line));background:linear-gradient(135deg,color-mix(in srgb,var(--pale) 58%,var(--card)),var(--card))}
+    .news-meta{display:flex;align-items:center;gap:7px;min-height:23px;margin-bottom:13px}
+    .news-source{display:inline-flex;align-items:center;border-radius:6px;background:var(--pale);padding:3px 7px;color:var(--green);font:750 10px ui-monospace,SFMono-Regular,monospace}
+    .news-official{padding:2px 6px;border:1px solid var(--line);border-radius:6px;color:var(--muted);font-size:9px;font-weight:750;letter-spacing:.05em}
+    .news-date{margin-left:auto;color:var(--muted);font:10px ui-monospace,SFMono-Regular,monospace}
+    .news-card h3{display:block!important;margin:0 0 8px!important;font-size:15px;line-height:1.5;letter-spacing:-.12px}
+    .news-card p{display:-webkit-box;margin:0;color:var(--muted);font-size:11.5px;line-height:1.68;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+    .news-card-footer{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:auto;padding-top:16px;color:var(--green);font-size:10px;font-weight:750}
+
+    .pdf-dialog{width:min(1480px,98vw);height:calc(100vh - 24px);max-height:none;padding:16px 18px 18px}
+    .pdf-dialog>.dialog-head{min-height:48px;margin:0;padding:0 0 10px;border-bottom:1px solid var(--line)}
+    .pdf-dialog>.dialog-head h2{max-width:min(980px,74vw);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:17px}
+    .pdf-toolbar{gap:8px;padding:9px 0}
+    .pdf-page-navigation{flex:0 0 auto}.pdf-page-navigation .small{min-width:34px}
+    .pdf-controls-slot{display:flex}.pdf-toolbar-config{display:flex;gap:8px}
+    .pdf-toolbar-group label{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:9px;font-weight:750}
+    .pdf-processing-tools .mono{padding:0 3px}
+    .pdf-toolbar-state{display:grid;align-content:center;gap:4px;width:min(180px,18vw);margin-left:auto}
+    .pdf-toolbar-state .pdf-status{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .pdf-progress{width:100%;min-width:0}
+    .pdf-search{margin-left:0}.pdf-search input{width:min(210px,19vw)}
+    .pdf-annotation-toolbar{gap:5px;padding:8px 0}.pdf-annotation-toolbar .small{padding:7px 9px}
+    .pdf-export-menu{position:relative}.pdf-export-menu>summary{list-style:none;border:1px solid var(--line);border-radius:8px;background:var(--card);padding:7px 10px;color:var(--green);font-size:10px;font-weight:750;cursor:pointer}.pdf-export-menu>summary::-webkit-details-marker{display:none}
+    .pdf-export-menu[open]>summary{border-color:var(--green);background:var(--pale)}.pdf-export-menu>div{position:absolute;right:0;top:40px;z-index:12;display:grid;gap:6px;width:190px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--card);box-shadow:0 18px 45px #0004}.pdf-export-menu button{width:100%}
+    .pdf-reader{grid-template-columns:minmax(0,1fr) var(--reader-pane-width);height:calc(100vh - 190px);min-height:520px}
+    html[data-reader-pane="wide"]{--reader-pane-width:minmax(420px,500px)}
+    .pdf-canvas-stage{min-height:0;padding:26px}
+    .pdf-text-pane{display:flex;flex-direction:column;min-height:0}
+    .pdf-sidebar-controls-slot{padding:12px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--soft) 65%,var(--card))}
+    .pdf-sidebar-controls-slot .pdf-toolbar-config{display:grid;gap:8px}
+    .pdf-sidebar-controls-slot .pdf-toolbar-group{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));align-items:end;gap:7px;padding:0;border:0;background:transparent}
+    .pdf-sidebar-controls-slot .pdf-toolbar-group label{display:grid;gap:4px}.pdf-sidebar-controls-slot .pdf-toolbar-group select{width:100%}
+    .pdf-sidebar-controls-slot .pdf-processing-tools{grid-template-columns:1fr 1fr}.pdf-sidebar-controls-slot .pdf-processing-tools .mono{grid-column:1/-1}
+    .pdf-pane-head{flex:0 0 auto}.pdf-pane-content{padding:15px 16px 22px}
+    .pdf-reading-options{display:flex;align-items:end;gap:8px;margin:0 0 8px}.pdf-reading-options label{display:grid;flex:1;gap:4px;color:var(--muted);font-size:9px;font-weight:750}.pdf-reading-options select{width:100%;border:1px solid var(--line);border-radius:7px;background:var(--card);padding:7px}
+    .pdf-text-help{margin:0 0 9px;color:var(--muted);font-size:10px;line-height:1.55}
+    .pdf-page-text{display:grid;gap:10px;margin-top:10px;white-space:normal;font-size:11.5px;line-height:1.78}
+    .pdf-page-text.plain{display:block;white-space:pre-wrap}
+    .pdf-text-block{padding:11px 12px;border:1px solid var(--line);border-radius:9px;background:color-mix(in srgb,var(--soft) 42%,var(--card))}
+    .pdf-text-block.heading{padding:7px 0;border:0;border-radius:0;background:transparent}.pdf-text-block.heading .pdf-text-source{font-size:13px;font-weight:800;color:var(--ink)}
+    .pdf-text-block-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px}.pdf-text-block-head span{color:var(--muted);font:9px ui-monospace,SFMono-Regular,monospace}.pdf-text-block-head button{border:0;background:transparent;color:var(--green);font-size:9px;font-weight:750}
+    .pdf-text-source,.pdf-text-translation{margin:0}.pdf-text-translation{margin-top:9px;padding-top:9px;border-top:1px dashed var(--line);color:var(--ink)}.pdf-text-translation.pending{color:var(--muted);font-style:italic}
+
+    @media(min-width:721px){
+      html[data-sidebar="collapsed"] .nav-group-label{display:none}
+      html[data-sidebar="collapsed"] .nav-group+.nav-group{margin-top:5px;padding-top:10px}
+    }
+    @media(max-width:1100px){
+      .news-cluster-grid{grid-template-columns:1fr}
+      .pdf-toolbar-state{order:5;width:100%;grid-template-columns:1fr 160px;align-items:center;margin-left:0}
+      .pdf-reader{height:calc(100vh - 225px)}
+    }
+    @media(max-width:720px){
+      :root{--content-gap:14px}
+      .app{display:block}.sidebar{display:block}.nav{grid-template-columns:repeat(6,1fr);gap:0;overflow:visible;padding:0}.nav-group{display:contents}.nav-group-label{display:none}.nav-group+.nav-group{padding:0;border:0}
+      .nav button.active:before{left:50%;top:auto;bottom:1px;width:18px;height:3px;transform:translateX(-50%)}
+      .main{padding:0 15px 38px}.topbar{height:62px}.page-head{margin-top:21px}h1{font-size:27px}
+      .news-filterbar{display:grid;grid-template-columns:1fr 1fr}.news-filterbar label:last-child{grid-column:1/-1}.news-filterbar select{width:100%}
+      .news-cluster-head{align-items:flex-start}.news-cluster-head h2{font-size:16px}.news-card{padding:16px}.news-card:hover{transform:none}
+      .pdf-dialog{height:100%;padding:10px}.pdf-dialog>.dialog-head h2{max-width:72vw}
+      .pdf-toolbar{flex-wrap:wrap}.pdf-controls-slot,.pdf-toolbar-config{width:100%}.pdf-toolbar-config{overflow-x:auto}.pdf-toolbar-config>*{flex:0 0 auto}
+      .pdf-search{flex:1}.pdf-search input{width:auto;min-width:0;flex:1}.pdf-toolbar-state{grid-template-columns:1fr 110px}
+      .pdf-reader{height:calc(100vh - 250px);min-height:420px}.pdf-text-pane{max-height:58vh}.pdf-sidebar-controls-slot{display:none!important}
+      .pdf-annotation-toolbar{flex-wrap:nowrap}.pdf-shortcuts{display:none}.pdf-export-menu{flex:0 0 auto}
+    }
   </style>
 </head>
 <body>
 <div class="app">
   <aside class="sidebar">
     <button class="brand" data-route="home"><i class="logo"></i>PaperScope</button>
-    <div class="caption">RESEARCH WORKSPACE</div>
     <nav class="nav" id="main-nav">
-      <button data-route="home"><span class="nav-icon">⌂</span><span>概览</span></button>
-      <button data-route="ai"><span class="nav-icon">◇</span><span>AI 论文</span></button>
-      <button data-route="architecture"><span class="nav-icon">▦</span><span>体系结构</span></button>
-      <button data-route="curated"><span class="nav-icon">✦</span><span>顶会精选</span></button>
-      <button data-route="library"><span class="nav-icon">★</span><span>文献库</span></button>
-      <button data-route="news"><span class="nav-icon">◫</span><span>资讯</span></button>
-      <button data-route="venues"><span class="nav-icon">◎</span><span>会议期刊</span></button>
-      <button data-route="settings"><span class="nav-icon">⚙</span><span>设置</span></button>
-      <button class="mobile-more-button" id="mobile-more" aria-haspopup="menu" aria-controls="mobile-more-menu" aria-expanded="false"><span class="nav-icon">•••</span><span>更多</span></button>
+      <div class="nav-group">
+        <span class="nav-group-label">工作台</span>
+        <button data-route="home"><span class="nav-icon">⌂</span><span>概览</span></button>
+      </div>
+      <div class="nav-group">
+        <span class="nav-group-label">研究内容</span>
+        <button data-route="ai"><span class="nav-icon">◇</span><span>AI 论文</span></button>
+        <button data-route="architecture"><span class="nav-icon">▦</span><span>体系结构</span></button>
+        <button data-route="curated"><span class="nav-icon">✦</span><span>顶会精选</span></button>
+      </div>
+      <div class="nav-group">
+        <span class="nav-group-label">资料与动态</span>
+        <button data-route="library"><span class="nav-icon">★</span><span>文献库</span></button>
+        <button data-route="news"><span class="nav-icon">◫</span><span>资讯</span></button>
+        <button data-route="venues"><span class="nav-icon">◎</span><span>会议期刊</span></button>
+      </div>
+      <div class="nav-group nav-group-system">
+        <span class="nav-group-label">系统</span>
+        <button data-route="settings"><span class="nav-icon">⚙</span><span>设置</span></button>
+        <button class="mobile-more-button" id="mobile-more" aria-haspopup="menu" aria-controls="mobile-more-menu" aria-expanded="false"><span class="nav-icon">•••</span><span>更多</span></button>
+      </div>
     </nav>
     <div class="side-bottom"><button class="install" id="install-app">安装为 APP</button><div class="sync-box"><strong>每日自动更新</strong><span id="side-sync">等待数据</span></div></div>
   </aside>
@@ -298,10 +412,10 @@
     </section>
 
     <section class="view" id="view-news">
-      <div class="page-head"><div><div class="eyebrow">OFFICIAL RESEARCH NEWS</div><h1>研究资讯</h1><p class="subtitle">来自 OpenAI、Google DeepMind 与 Microsoft Research 官方来源。</p></div></div>
-      <div class="filterbar"><select id="news-source"><option value="all">全部来源</option></select><select id="news-page-size"><option value="9">每页 9 条</option><option value="18">每页 18 条</option></select></div>
+      <div class="page-head"><div><div class="eyebrow">OFFICIAL RESEARCH NEWS</div><h1>研究资讯</h1><p class="subtitle">突出重点，并将相近主题放在一起；来源、日期和标题保持清晰分层。</p></div></div>
+      <div class="filterbar news-filterbar"><label>来源<select id="news-source"><option value="all">全部来源</option></select></label><label>组织方式<select id="news-group"><option value="topic">按主题聚类</option><option value="newest">按时间排序</option><option value="source">按来源归纳</option></select></label><label>每页<select id="news-page-size"><option value="9">9 条</option><option value="18">18 条</option></select></label></div>
       <div class="result-meta"><span id="news-result-count"></span><span id="news-sync"></span></div>
-      <div class="news-grid" id="news-list"></div><div class="pagination" id="news-pagination"></div>
+      <div class="news-feed" id="news-list"></div><div class="pagination" id="news-pagination"></div>
     </section>
 
     <section class="view" id="view-venues">
@@ -314,12 +428,12 @@
     <section class="view" id="view-settings">
       <div class="page-head"><div><div class="eyebrow">WORKSPACE SETTINGS</div><h1>设置与数据</h1><p class="subtitle">界面、翻译、导入、备份和本地存储统一在这里管理；现有配置会完整保留。</p></div></div>
       <div class="settings-grid">
-        <section class="card settings-card"><h2>外观与布局</h2><p>切换四套现有界面方案、主题、信息密度、字号和侧边栏模式。</p><div class="settings-status"><div><span>当前配置</span><strong id="settings-ui-summary">经典绿 · 标准</strong></div></div><div class="settings-actions"><button class="primary" id="appearance-open">打开界面配置</button><button class="ghost" id="theme-toggle">切换明暗主题</button></div></section>
+        <section class="card settings-card"><h2>外观与布局</h2><p>保留四套现有界面方案，并统一管理字体、密度、导航分组和 PDF 阅读布局。</p><div class="settings-status"><div><span>当前配置</span><strong id="settings-ui-summary">经典绿 · 标准</strong></div><div><span>PDF 阅读</span><strong id="settings-reader-summary">智能侧栏 · 智能分段</strong></div></div><div class="settings-actions"><button class="primary" id="appearance-open">打开界面配置</button><button class="ghost" id="theme-toggle">切换明暗主题</button></div></section>
         <section class="card settings-card"><h2>阅读与翻译</h2><p>管理离线词典、段落翻译、选择翻译、在线精译代理和本地缓存。</p><div class="settings-status"><div><span>阅读翻译</span><strong id="settings-translation-summary">正在检查</strong></div></div><div class="settings-actions"><button class="primary" id="translation-open" aria-pressed="true">阅读翻译设置</button><button class="ghost" data-route="library/vocabulary">打开生词本</button><button class="ghost" data-route="library/translations">翻译历史</button></div></section>
         <section class="card settings-card"><h2>PDF 导入中心</h2><p>批量拖放 PDF、扫描文件夹、检查重复项和恢复失败任务。</p><div class="settings-status"><div><span>导入队列</span><strong id="settings-import-summary">0 个任务</strong></div></div><div class="settings-actions"><button class="primary" id="settings-import-pdf">打开导入中心</button><button class="ghost" id="import-pdf-directory">扫描文件夹</button></div></section>
         <section class="card settings-card"><h2>备份与迁移</h2><p>完整备份包含文献索引、PDF 和标注；JSON 用于轻量迁移，不含 PDF 二进制。</p><div class="settings-actions"><button class="primary" id="export-full-backup">完整备份</button><button class="ghost" id="export-library">导出 JSON</button><button class="ghost" id="import-library">导入 JSON</button><button class="ghost" id="export-vocabulary">导出生词</button></div></section>
         <section class="card settings-card"><h2>存储与维护</h2><p>核对 IndexedDB 附件、修复断链，或清理回收站中的文献和 PDF。</p><div class="settings-status"><div><span>本地存储</span><strong id="settings-storage-summary">正在估算</strong></div><div><span>回收站</span><strong id="settings-trash-summary">0 篇</strong></div></div><div class="settings-actions"><button class="ghost" id="repair-pdf-library">附件检查</button><button class="ghost danger" id="empty-trash">清空回收站</button></div></section>
-        <section class="card settings-card" id="settings-help"><h2>个人资料、快捷键与版本</h2><p>PaperScope v6.5 · 数据默认只保存在当前浏览器。</p><div class="settings-status"><div><span>快速跳转</span><strong>Ctrl/⌘ + K</strong></div><div><span>关闭菜单或弹窗</span><strong>Esc</strong></div><div><span>PDF 标注</span><strong>H / U / N / R</strong></div></div><div class="settings-actions"><button class="primary" id="settings-profile">编辑个人资料</button><button class="ghost" id="settings-install">安装为 APP</button></div></section>
+        <section class="card settings-card" id="settings-help"><h2>个人资料、快捷键与版本</h2><p>PaperScope v6.6 · 数据默认只保存在当前浏览器。</p><div class="settings-status"><div><span>快速跳转</span><strong>Ctrl/⌘ + K</strong></div><div><span>关闭菜单或弹窗</span><strong>Esc</strong></div><div><span>PDF 标注</span><strong>H / U / N / R</strong></div></div><div class="settings-actions"><button class="primary" id="settings-profile">编辑个人资料</button><button class="ghost" id="settings-install">安装为 APP</button></div></section>
       </div>
       <input class="hidden" type="file" id="import-file" accept="application/json"><input class="hidden" type="file" id="local-pdf-file" accept="application/pdf,.pdf" multiple><input class="hidden" type="file" id="local-pdf-directory" accept="application/pdf,.pdf" multiple webkitdirectory>
     </section>
@@ -347,9 +461,15 @@
 <div class="modal" id="profile-modal"><div class="dialog" style="width:min(520px,95vw)"><div class="dialog-head"><h2>编辑个人资料</h2><button class="icon-button" data-close-modal="profile-modal">×</button></div><div class="editor"><input id="profile-name" maxlength="30" placeholder="显示名称"><input id="profile-focus" maxlength="80" placeholder="研究方向"><textarea id="profile-bio" maxlength="180" placeholder="个人简介"></textarea><button class="primary" id="save-profile">保存资料</button></div></div></div>
 <div class="modal" id="pdf-modal"><div class="dialog pdf-dialog" aria-labelledby="pdf-title">
   <div class="dialog-head"><div><h2 id="pdf-title" data-translatable>站内 PDF 阅读与标注</h2><span class="pdf-status" id="pdf-meta"></span></div><button class="icon-button" data-close-modal="pdf-modal">×</button></div>
-  <div class="pdf-toolbar"><div class="pdf-toolbar-group"><button class="small" id="pdf-prev">← 上一页</button><span class="mono" id="pdf-page-label">0 / 0</span><button class="small" id="pdf-next">下一页 →</button></div><div class="pdf-toolbar-group"><select id="pdf-view-mode" aria-label="PDF 阅读模式"><option value="continuous">上下连续滚动</option><option value="paged">单页翻页</option></select><select id="pdf-zoom" aria-label="PDF 缩放"><option value="0.9">90%</option><option value="1.15">115%</option><option value="1.4" selected>140%</option><option value="1.75">175%</option><option value="2.2">220%</option></select></div><div class="pdf-toolbar-group"><button class="small" id="pdf-reparse">解析文本</button><button class="small" id="pdf-ocr-page">OCR 本页</button><button class="small" id="pdf-ocr-missing">OCR 缺失页</button></div><button class="small" id="pdf-inspector-toggle" aria-expanded="false" aria-controls="pdf-text-pane">▤ 阅读信息 <span class="pdf-count" id="pdf-inspector-count">0</span></button><span class="pdf-status" id="pdf-status">等待载入</span><div class="pdf-progress"><i id="pdf-progress"></i></div><div class="pdf-search"><input id="pdf-search-input" placeholder="搜索 PDF 全文"><button class="small" id="pdf-search-button">搜索</button></div></div>
-  <div class="pdf-annotation-toolbar"><span class="mono">标注工具</span><select id="pdf-annotation-color" aria-label="标注颜色"><option value="#f4d35e">黄色</option><option value="#80c99a">绿色</option><option value="#74a9e8">蓝色</option><option value="#e58aa3">粉色</option></select><button class="small" id="pdf-highlight-selection" data-pdf-tool="highlight" title="快捷键 H">高亮 H</button><button class="small" id="pdf-underline-selection" data-pdf-tool="underline" title="快捷键 U">下划线 U</button><button class="small" id="pdf-note-selection" data-pdf-tool="note" title="快捷键 N">文字批注 N</button><button class="small" data-pdf-tool="area" title="快捷键 R">框选区域 R</button><button class="small" data-pdf-tool="area-note" title="快捷键 Shift+N">区域批注 ⇧N</button><button class="small" id="pdf-cancel-annotation" title="快捷键 Esc">取消 Esc</button><button class="small" id="pdf-undo-annotation" title="快捷键 Ctrl/Cmd+Z">撤销 Ctrl+Z</button><span class="pdf-toolbar-divider"></span><button class="primary" id="pdf-export-annotated">导出带标注 PDF</button><button class="small" id="pdf-export-annotations">导出标注数据</button><button class="small" id="pdf-import-annotations">导入标注数据</button><input class="hidden" id="pdf-annotations-file" type="file" accept="application/json,.json"><span class="mono pdf-shortcuts" id="pdf-tool-status">浏览模式 · 选中文字可翻译</span></div>
-  <div class="pdf-reader inspector-hidden" id="pdf-reader"><div class="pdf-canvas-stage" id="pdf-canvas-stage"><div class="pdf-pages-container" id="pdf-pages-container"><div class="pdf-page-stack" id="pdf-page-stack" data-pdf-page-stack data-page="1"><canvas class="pdf-page-canvas" id="pdf-canvas"></canvas><div class="textLayer" id="pdf-text-layer" data-translatable></div><div class="pdf-annotation-layer" id="pdf-annotation-layer"></div></div></div></div><aside class="pdf-text-pane hidden" id="pdf-text-pane"><div class="pdf-pane-head"><div class="pdf-pane-tabs" role="tablist" aria-label="阅读信息"><button class="active" role="tab" data-pdf-pane-tab="annotations" aria-selected="true">标注</button><button role="tab" data-pdf-pane-tab="text" aria-selected="false">页面文本</button></div><button class="icon-button" id="pdf-inspector-close" aria-label="关闭阅读信息">×</button></div><section class="pdf-pane-content" id="pdf-pane-annotations"><div class="pdf-pane-summary"><strong>全部标注</strong><span class="mono">H / U / N 快捷标注</span></div><p class="panel-note">拖选文字后可高亮、加下划线或批注；Esc 取消，Ctrl/Cmd+Z 撤销。</p><div class="pdf-annotation-list" id="pdf-annotation-list"></div></section><section class="pdf-pane-content hidden" id="pdf-pane-text"><div class="pdf-pane-summary"><strong>第 <span id="pdf-pane-page">0</span> 页文本</strong><button class="small" id="pdf-copy-page">复制本页</button></div><div class="pdf-extraction-report" id="pdf-extraction-report">等待文本解析</div><div class="pdf-search-results hidden" id="pdf-search-results"></div><div class="pdf-page-text" id="pdf-page-text" data-translatable></div></section></aside></div>
+  <div class="pdf-toolbar">
+    <div class="pdf-toolbar-group pdf-page-navigation"><button class="small" id="pdf-prev">←</button><span class="mono" id="pdf-page-label">0 / 0</span><button class="small" id="pdf-next">→</button></div>
+    <div class="pdf-controls-slot" id="pdf-toolbar-controls-slot"><div class="pdf-toolbar-config" id="pdf-toolbar-config"><div class="pdf-toolbar-group"><label>阅读<select id="pdf-view-mode" aria-label="PDF 阅读模式"><option value="continuous">连续滚动</option><option value="paged">单页翻页</option></select></label><label>缩放<select id="pdf-zoom" aria-label="PDF 缩放"><option value="0.9">90%</option><option value="1.15">115%</option><option value="1.4" selected>140%</option><option value="1.75">175%</option><option value="2.2">220%</option></select></label></div><div class="pdf-toolbar-group pdf-processing-tools"><span class="mono">文本处理</span><button class="small" id="pdf-reparse">重新解析</button><button class="small" id="pdf-ocr-page">OCR 本页</button><button class="small" id="pdf-ocr-missing">OCR 缺失页</button></div></div></div>
+    <button class="small" id="pdf-inspector-toggle" aria-expanded="false" aria-controls="pdf-text-pane">▤ 阅读侧栏 <span class="pdf-count" id="pdf-inspector-count">0</span></button>
+    <div class="pdf-search"><input id="pdf-search-input" placeholder="搜索全文"><button class="small" id="pdf-search-button">搜索</button></div>
+    <div class="pdf-toolbar-state"><span class="pdf-status" id="pdf-status">等待载入</span><div class="pdf-progress"><i id="pdf-progress"></i></div></div>
+  </div>
+  <div class="pdf-annotation-toolbar"><span class="mono">标注</span><select id="pdf-annotation-color" aria-label="标注颜色"><option value="#f4d35e">黄色</option><option value="#80c99a">绿色</option><option value="#74a9e8">蓝色</option><option value="#e58aa3">粉色</option></select><button class="small" id="pdf-highlight-selection" data-pdf-tool="highlight" title="快捷键 H">高亮 H</button><button class="small" id="pdf-underline-selection" data-pdf-tool="underline" title="快捷键 U">下划线 U</button><button class="small" id="pdf-note-selection" data-pdf-tool="note" title="快捷键 N">批注 N</button><button class="small" data-pdf-tool="area" title="快捷键 R">框选 R</button><button class="small" data-pdf-tool="area-note" title="快捷键 Shift+N">区域批注</button><button class="small" id="pdf-cancel-annotation" title="快捷键 Esc">取消</button><button class="small" id="pdf-undo-annotation" title="快捷键 Ctrl/Cmd+Z">撤销</button><details class="pdf-export-menu"><summary>导入 / 导出</summary><div><button class="primary" id="pdf-export-annotated">导出带标注 PDF</button><button class="small" id="pdf-export-annotations">导出标注数据</button><button class="small" id="pdf-import-annotations">导入标注数据</button></div></details><input class="hidden" id="pdf-annotations-file" type="file" accept="application/json,.json"><span class="mono pdf-shortcuts" id="pdf-tool-status">浏览模式 · 选中文字可翻译</span></div>
+  <div class="pdf-reader inspector-hidden" id="pdf-reader"><div class="pdf-canvas-stage" id="pdf-canvas-stage"><div class="pdf-pages-container" id="pdf-pages-container"><div class="pdf-page-stack" id="pdf-page-stack" data-pdf-page-stack data-page="1"><canvas class="pdf-page-canvas" id="pdf-canvas"></canvas><div class="textLayer" id="pdf-text-layer" data-translatable></div><div class="pdf-annotation-layer" id="pdf-annotation-layer"></div></div></div></div><aside class="pdf-text-pane hidden" id="pdf-text-pane"><div class="pdf-sidebar-controls-slot hidden" id="pdf-sidebar-controls-slot"></div><div class="pdf-pane-head"><div class="pdf-pane-tabs" role="tablist" aria-label="阅读信息"><button class="active" role="tab" data-pdf-pane-tab="annotations" aria-selected="true">标注</button><button role="tab" data-pdf-pane-tab="text" aria-selected="false">页面文本</button></div><button class="icon-button" id="pdf-inspector-close" aria-label="关闭阅读信息">×</button></div><section class="pdf-pane-content" id="pdf-pane-annotations"><div class="pdf-pane-summary"><strong>全部标注</strong><span class="mono">H / U / N 快捷标注</span></div><p class="panel-note">拖选文字后可高亮、加下划线或批注；Esc 取消，Ctrl/Cmd+Z 撤销。</p><div class="pdf-annotation-list" id="pdf-annotation-list"></div></section><section class="pdf-pane-content hidden" id="pdf-pane-text"><div class="pdf-pane-summary"><strong>第 <span id="pdf-pane-page">0</span> 页文本</strong><button class="small" id="pdf-copy-page">复制本页</button></div><div class="pdf-reading-options"><label>排版<select id="pdf-text-mode"><option value="paragraphs">智能分段</option><option value="bilingual">分段对照</option><option value="plain">原始文本</option></select></label><button class="small hidden" id="pdf-translate-page">翻译本页</button></div><p class="pdf-text-help" id="pdf-text-help">已按语义分段，选择文字可翻译或标注。</p><div class="pdf-extraction-report" id="pdf-extraction-report">等待文本解析</div><div class="pdf-search-results hidden" id="pdf-search-results"></div><div class="pdf-page-text" id="pdf-page-text" data-translatable></div></section></aside></div>
 </div></div>
 <div class="modal" id="metadata-modal"><div class="dialog" style="width:min(650px,95vw)"><div class="dialog-head"><h2>编辑论文元数据</h2><button class="icon-button" data-close-modal="metadata-modal">×</button></div><div class="editor"><input id="metadata-title" placeholder="标题"><textarea id="metadata-authors" placeholder="作者，每行一位"></textarea><div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><input id="metadata-date" type="date"><input id="metadata-venue" placeholder="会议或期刊"></div><input id="metadata-doi" placeholder="DOI"><input id="metadata-url" type="url" placeholder="原文网址"><button class="primary" id="save-metadata">保存元数据</button></div></div></div>
 <div class="modal" id="pdf-import-modal"><div class="dialog pdf-import-dialog" aria-labelledby="pdf-import-title">
@@ -372,6 +492,9 @@
     <label>信息密度<select id="appearance-density"><option value="comfortable">舒适</option><option value="standard">标准</option><option value="compact">紧凑</option></select></label>
     <label>字体大小<select id="appearance-font"><option value="0.9">90%</option><option value="1">100%</option><option value="1.1">110%</option><option value="1.2">120%</option><option value="1.3">130%</option></select></label>
     <label>侧栏<select id="appearance-sidebar"><option value="expanded">展开</option><option value="collapsed">折叠</option></select></label>
+    <label>阅读器工具位置<select id="appearance-reader-controls"><option value="auto">智能（桌面侧栏）</option><option value="top">始终置顶</option><option value="sidebar">始终侧栏</option></select></label>
+    <label>页面文本排版<select id="appearance-reader-text"><option value="paragraphs">智能分段</option><option value="bilingual">分段对照翻译</option><option value="plain">原始连续文本</option></select></label>
+    <label>阅读侧栏宽度<select id="appearance-reader-pane"><option value="standard">标准</option><option value="wide">宽侧栏</option></select></label>
     <label class="appearance-check"><input type="checkbox" id="appearance-motion"> 减少动画</label>
   </div>
   <div class="dialog-actions"><button class="primary" id="appearance-save">保存配置</button><button class="ghost" id="appearance-reset">恢复经典设置</button></div>
@@ -404,6 +527,6 @@
 </aside>
 <aside class="update-banner" id="update-banner" role="status" aria-live="polite"><div><strong>PaperScope 新版本已准备好</strong><span>刷新即可切换到完整新版，不会清除收藏、笔记或生词本。</span></div><div class="update-actions"><button class="primary" id="update-now">立即刷新</button><button class="ghost" id="update-later">稍后</button></div></aside>
 <button class="backtop" id="backtop" title="返回顶部">↑</button><div class="toast" id="toast"></div>
-<script type="module" src="./app.js?v=6.5.0"></script>
+<script type="module" src="./app.js?v=6.6.0"></script>
 </body>
 </html>

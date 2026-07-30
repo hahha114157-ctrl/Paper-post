@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dist = path.join(root, 'dist');
-const staticFiles = ['index.html', 'app.js', 'pdf-storage.js', 'library-logic.js', 'manifest.webmanifest', 'service-worker.js', 'icon.svg'];
+const staticFiles = ['index.html', 'app.js', 'pdf-storage.js', 'library-logic.js', 'ui-logic.js', 'manifest.webmanifest', 'service-worker.js', 'icon.svg'];
 const generatedAt = '2026-07-29T00:00:00.000Z';
 
 function fixturePaper(area, index) {

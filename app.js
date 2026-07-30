@@ -28,8 +28,13 @@ import {
   setRecordRead,
   validateCollectionTree
 } from './library-logic.js';
+import {
+  cleanNewsSource,
+  groupNewsItems,
+  segmentReaderText
+} from './ui-logic.js';
 
-const APP_VERSION = '6.5.0';
+const APP_VERSION = '6.6.0';
 const STORAGE_KEY = 'paperscope-library-v4';
 const V3_STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
@@ -45,6 +50,7 @@ const PDF_VIEW_MODE_KEY = 'paperscope-pdf-view-mode-v1';
 const PDF_INSPECTOR_OPEN_KEY = 'paperscope-pdf-inspector-open-v1';
 const PDF_INSPECTOR_TAB_KEY = 'paperscope-pdf-inspector-tab-v1';
 const UI_SETTINGS_KEY = 'paperscope-ui-settings-v1';
+const initialPdfInspectorSetting = localStorage.getItem(PDF_INSPECTOR_OPEN_KEY);
 const TRANSLATION_DEFAULTS = {
   enabled: true, wordClick: true, selection: true, cache: true, mode: 'auto',
   wordClickMode: 'ctrl', positionMode: 'follow', position: null, onlineEndpoint: ''
@@ -88,7 +94,7 @@ const state = {
   pdfLoadingTask: null, pdfDocument: null, pdfRecord: null, pdfPaperId: null, pdfPage: 1, pdfScale: 1.4, pdfRenderTask: null,
   pdfTextContent: null, pdfSelection: null, pdfAnnotationMode: null, pdfAnnotationDraft: null, pdfTextSelectionDraft: null, pdfBrowseSelection: null, pdfSuppressWordClick: false, pdfAnnotationHistory: [], libraryPdfMatches: null,
   pdfViewMode: localStorage.getItem(PDF_VIEW_MODE_KEY) === 'paged' ? 'paged' : 'continuous',
-  pdfInspectorOpen: localStorage.getItem(PDF_INSPECTOR_OPEN_KEY) === 'open',
+  pdfInspectorOpen: initialPdfInspectorSetting === null ? matchMedia('(min-width:1100px)').matches : initialPdfInspectorSetting === 'open',
   pdfInspectorTab: localStorage.getItem(PDF_INSPECTOR_TAB_KEY) === 'text' ? 'text' : 'annotations',
   pdfColumnTemplate: null,
   pdfContinuousObserver: null, pdfPageObserver: null, pdfContinuousTasks: new Map(), pdfPageVisibility: new Map(),
@@ -128,6 +134,9 @@ const UI_DEFAULTS = {
   density: 'standard',
   fontScale: 1,
   sidebar: 'expanded',
+  readerControls: 'auto',
+  readerTextMode: 'paragraphs',
+  readerPane: 'standard',
   reduceMotion: matchMedia('(prefers-reduced-motion: reduce)').matches
 };
 let uiSettings = { ...UI_DEFAULTS, ...readJson(UI_SETTINGS_KEY, {}) };
@@ -697,10 +706,16 @@ async function permanentlyDeleteRecords(ids = selectedRecordIds()) {
 
 function renderNewsPage(route) {
   const q = route.query.q || ''; const source = route.query.source || 'all'; const size = Number(route.query.size) === 18 ? 18 : 9; const page = Math.max(1, Number(route.query.page || 1));
-  const sources = [...new Set(state.news.items.map(item => item.source))]; el('news-source').innerHTML = `<option value="all">全部来源</option>${sources.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}`; el('news-source').value = source; el('news-page-size').value = String(size);
-  const items = state.news.items.filter(item => (source === 'all' || item.source === source) && (!q || `${item.title} ${item.summary}`.toLowerCase().includes(q.toLowerCase()))); const pages = Math.max(1, Math.ceil(items.length / size)); const safePage = Math.min(page, pages); const pageItems = items.slice((safePage - 1) * size, safePage * size);
-  el('news-result-count').textContent = `${items.length} 条资讯 · 第 ${safePage}/${pages} 页`; el('news-sync').textContent = `更新 ${dateText(state.news.generatedAt, true)}`;
-  el('news-list').innerHTML = pageItems.map(item => `<a class="news-card" href="${escapeHtml(safeUrl(item.link))}" target="_blank" rel="noopener"><span class="news-source">${escapeHtml(item.source)} · OFFICIAL</span><h3 data-translatable>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary || '打开官方页面查看详情。')}</p><div class="tag-row"><span class="tag">${escapeHtml(dateText(item.published))}</span></div></a>`).join('') || '<div class="empty">没有匹配资讯。</div>';
+  const groupMode = ['topic', 'newest', 'source'].includes(route.query.group) ? route.query.group : 'topic';
+  const sources = [...new Set(state.news.items.map(item => item.source))];
+  el('news-source').innerHTML = `<option value="all">全部来源</option>${sources.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(cleanNewsSource(name))}</option>`).join('')}`;
+  el('news-source').value = source; el('news-group').value = groupMode; el('news-page-size').value = String(size);
+  const filtered = state.news.items.filter(item => (source === 'all' || item.source === source) && (!q || `${item.title} ${item.summary}`.toLowerCase().includes(q.toLowerCase())));
+  const ordered = groupNewsItems(filtered, groupMode).flatMap(group => group.items);
+  const pages = Math.max(1, Math.ceil(ordered.length / size)); const safePage = Math.min(page, pages); const pageItems = ordered.slice((safePage - 1) * size, safePage * size);
+  const pageGroups = groupNewsItems(pageItems, groupMode);
+  el('news-result-count').textContent = `${ordered.length} 条资讯 · ${pageGroups.length} 个分组 · 第 ${safePage}/${pages} 页`; el('news-sync').textContent = `更新 ${dateText(state.news.generatedAt, true)}`;
+  el('news-list').innerHTML = pageGroups.map(group => `<section class="news-cluster"><header class="news-cluster-head"><div><h2>${escapeHtml(group.label)}</h2><p>${escapeHtml(group.description)}</p></div><span class="news-cluster-count">${group.items.length} 条</span></header><div class="news-cluster-grid">${group.items.map((item, index) => `<a class="news-card ${index === 0 ? 'featured' : ''}" href="${escapeHtml(safeUrl(item.link))}" target="_blank" rel="noopener"><div class="news-meta"><span class="news-source">${escapeHtml(cleanNewsSource(item.source))}</span><span class="news-official">官方</span><time class="news-date">${escapeHtml(dateText(item.published))}</time></div><h3 data-translatable>${escapeHtml(item.title)}</h3><p>${escapeHtml(item.summary || '打开官方页面查看详情。')}</p><div class="news-card-footer"><span>${escapeHtml(group.label)}</span><span>查看原文 ↗</span></div></a>`).join('')}</div></section>`).join('') || '<div class="empty">没有匹配资讯。</div>';
   renderPagination('news-pagination', safePage, pages, next => navigate('news', { ...route.query, page: next }));
 }
 function venueRank(venue) { return venue.state === 'open' ? 0 : venue.state === 'rolling' ? 1 : venue.state === 'unannounced' ? 2 : 3; }
@@ -1349,12 +1364,99 @@ function createPdfPageStack(pageNumber, viewport, primary = false) {
 function pdfStackForPage(pageNumber = state.pdfPage) {
   return el('pdf-pages-container')?.querySelector(`[data-pdf-page-stack][data-page="${Number(pageNumber)}"]`) || null;
 }
+function readerTextMode() {
+  return ['paragraphs', 'bilingual', 'plain'].includes(uiSettings.readerTextMode) ? uiSettings.readerTextMode : 'paragraphs';
+}
+function currentPdfTextBlocks() {
+  return segmentReaderText(state.pdfRecord?.pages?.[state.pdfPage - 1] || '');
+}
+function renderPdfPageText(text) {
+  const container = el('pdf-page-text'); if (!container) return;
+  const mode = readerTextMode(); const modeSelect = el('pdf-text-mode'); const translateButton = el('pdf-translate-page');
+  if (modeSelect) modeSelect.value = mode;
+  if (translateButton) translateButton.classList.toggle('hidden', mode !== 'bilingual' || !text);
+  const help = el('pdf-text-help');
+  if (help) help.textContent = mode === 'bilingual'
+    ? '原文与译文逐段对照；译文只缓存在当前浏览器。'
+    : mode === 'plain' ? '保留 PDF 提取顺序，适合复制和全文检索。' : '已按标题和语义边界分段，选择文字可翻译或标注。';
+  container.className = `pdf-page-text ${mode}`;
+  if (!text) {
+    container.classList.add('empty');
+    container.textContent = '这一页没有可提取的文本。若它是扫描图片，请点击“OCR 本页”；识别结果会保存在当前浏览器。';
+    return;
+  }
+  if (mode === 'plain') {
+    container.textContent = text;
+    return;
+  }
+  const blocks = currentPdfTextBlocks();
+  container.innerHTML = blocks.map((block, index) => {
+    const cached = mode === 'bilingual' ? cachedTranslation(block.text) : null;
+    const translation = cached?.translation || '';
+    return `<article class="pdf-text-block ${escapeHtml(block.kind)}" data-pdf-paragraph="${index}"><div class="pdf-text-block-head"><span>${block.kind === 'heading' ? '段落标题' : String(index + 1).padStart(2, '0')}</span>${mode === 'bilingual' && block.kind !== 'heading' ? `<button type="button" data-pdf-translate-paragraph="${index}">${translation ? '刷新译文' : '翻译此段'}</button>` : ''}</div><p class="pdf-text-source" data-translatable>${escapeHtml(block.text)}</p>${mode === 'bilingual' && block.kind !== 'heading' ? `<p class="pdf-text-translation ${translation ? '' : 'pending'}">${escapeHtml(translation || '尚未翻译。可逐段翻译，或使用上方“翻译本页”。')}</p>` : ''}</article>`;
+  }).join('');
+}
+async function translateReaderParagraph(source) {
+  const cached = cachedTranslation(source); if (cached?.translation) return cached.translation;
+  if (!translationSettings.enabled) throw new Error('请先在阅读与翻译设置中启用翻译');
+  const context = getPaper(state.pdfPaperId)?.title || '';
+  let translation = ''; let provider = '';
+  if (translationSettings.mode === 'online' && safeTranslationEndpoint()) {
+    const result = await requestOnlineTranslation({ source, context });
+    translation = normalizedTranslationText(result.translation); provider = result.provider || '在线精译';
+  } else {
+    try {
+      const translator = await prepareTranslator();
+      translation = normalizedTranslationText(await translator.translate(source));
+      provider = '浏览器本地模型';
+    } catch (error) {
+      if (translationSettings.mode !== 'offline' && safeTranslationEndpoint()) {
+        const result = await requestOnlineTranslation({ source, context });
+        translation = normalizedTranslationText(result.translation); provider = result.provider || '在线精译';
+      } else throw error;
+    }
+  }
+  if (!translation) throw new Error('翻译服务没有返回内容');
+  storeTranslation(source, translation, { provider });
+  return translation;
+}
+async function translatePdfParagraph(index) {
+  const block = currentPdfTextBlocks()[Number(index)]; if (!block?.text || block.kind === 'heading') return;
+  const button = el('pdf-page-text')?.querySelector(`[data-pdf-translate-paragraph="${Number(index)}"]`);
+  const result = el('pdf-page-text')?.querySelector(`[data-pdf-paragraph="${Number(index)}"] .pdf-text-translation`);
+  if (button) { button.disabled = true; button.textContent = '翻译中…'; }
+  if (result) { result.textContent = '正在生成译文…'; result.classList.add('pending'); }
+  try {
+    await translateReaderParagraph(block.text);
+    renderPdfPageText(state.pdfRecord?.pages?.[state.pdfPage - 1] || '');
+  } catch (error) {
+    if (button) { button.disabled = false; button.textContent = '重试翻译'; }
+    if (result) result.textContent = `翻译失败：${error.message || '请稍后重试'}`;
+  }
+}
+async function translatePdfCurrentPage() {
+  const button = el('pdf-translate-page'); const blocks = currentPdfTextBlocks().filter(block => block.kind !== 'heading' && /[A-Za-z]/.test(block.text)).slice(0, 24);
+  if (!blocks.length) return toast('当前页没有可翻译的英文段落');
+  button.disabled = true;
+  try {
+    for (let index = 0; index < blocks.length; index += 1) {
+      button.textContent = `翻译 ${index + 1}/${blocks.length}`;
+      await translateReaderParagraph(blocks[index].text);
+    }
+    renderPdfPageText(state.pdfRecord?.pages?.[state.pdfPage - 1] || '');
+    toast(`已生成 ${blocks.length} 段对照译文`);
+  } catch (error) {
+    renderPdfPageText(state.pdfRecord?.pages?.[state.pdfPage - 1] || '');
+    toast(`页面翻译未完成：${error.message || '请稍后重试'}`);
+  } finally {
+    button.disabled = false; button.textContent = '翻译本页';
+  }
+}
 function updatePdfCurrentPage(pageNumber, { save = true } = {}) {
   if (!state.pdfDocument || !state.pdfRecord) return;
   state.pdfPage = Math.max(1, Math.min(state.pdfDocument.numPages, Number(pageNumber) || 1));
   const text = state.pdfRecord.pages[state.pdfPage - 1] || '';
-  el('pdf-page-text').textContent = text || '这一页没有可提取的文本。若它是扫描图片，请点击“OCR 本页”；识别结果会保存在当前浏览器。';
-  el('pdf-page-text').classList.toggle('empty', !text);
+  renderPdfPageText(text);
   el('pdf-page-label').textContent = `${state.pdfPage} / ${state.pdfDocument.numPages}`;
   el('pdf-pane-page').textContent = String(state.pdfPage);
   el('pdf-prev').disabled = state.pdfPage <= 1; el('pdf-next').disabled = state.pdfPage >= state.pdfDocument.numPages;
@@ -1514,6 +1616,28 @@ function renderPdfAnnotationLayer(viewport, pageNumber = state.pdfPage, layer = 
   layer.classList.toggle('drawing', ['area', 'area-note'].includes(state.pdfAnnotationMode));
 }
 function annotationTypeLabel(type) { return type === 'highlight' ? '高亮' : type === 'underline' ? '下划线' : type === 'note' ? '批注' : '区域'; }
+function preferredReaderControlsPlacement() {
+  if (uiSettings.readerControls === 'top') return 'top';
+  if (uiSettings.readerControls === 'sidebar') return window.innerWidth > 820 ? 'sidebar' : 'top';
+  return window.innerWidth >= 1100 ? 'sidebar' : 'top';
+}
+function placePdfReaderControls() {
+  const config = el('pdf-toolbar-config'); const topSlot = el('pdf-toolbar-controls-slot'); const sideSlot = el('pdf-sidebar-controls-slot');
+  if (!config || !topSlot || !sideSlot) return;
+  const placement = preferredReaderControlsPlacement() === 'sidebar' && state.pdfInspectorOpen ? 'sidebar' : 'top';
+  const target = placement === 'sidebar' ? sideSlot : topSlot;
+  if (config.parentElement !== target) target.append(config);
+  topSlot.classList.toggle('hidden', placement !== 'top');
+  sideSlot.classList.toggle('hidden', placement !== 'sidebar');
+  document.documentElement.dataset.pdfControlsPlacement = placement;
+}
+function syncPdfReaderPreferences({ renderText = true } = {}) {
+  document.documentElement.dataset.readerPane = uiSettings.readerPane === 'wide' ? 'wide' : 'standard';
+  document.documentElement.dataset.readerText = readerTextMode();
+  if (el('pdf-text-mode')) el('pdf-text-mode').value = readerTextMode();
+  placePdfReaderControls();
+  if (renderText && state.pdfRecord) renderPdfPageText(state.pdfRecord.pages?.[state.pdfPage - 1] || '');
+}
 function applyPdfInspectorState() {
   const pane = el('pdf-text-pane'); const reader = el('pdf-reader'); const toggle = el('pdf-inspector-toggle');
   if (!pane || !reader || !toggle) return;
@@ -1526,6 +1650,7 @@ function applyPdfInspectorState() {
   });
   el('pdf-pane-annotations').classList.toggle('hidden', state.pdfInspectorTab !== 'annotations');
   el('pdf-pane-text').classList.toggle('hidden', state.pdfInspectorTab !== 'text');
+  placePdfReaderControls();
 }
 function setPdfInspector(open, tab = state.pdfInspectorTab) {
   state.pdfInspectorOpen = Boolean(open);
@@ -3355,7 +3480,7 @@ el('pdf-import-queue').addEventListener('click', async event => {
   renderPdfImportQueue();
 });
 
-['news-source', 'news-page-size'].forEach(id => el(id).addEventListener('change', () => { const route = parseRoute(); navigate('news', { ...route.query, source: el('news-source').value, size: el('news-page-size').value, page: 1 }); }));
+['news-source', 'news-group', 'news-page-size'].forEach(id => el(id).addEventListener('change', () => { const route = parseRoute(); navigate('news', { ...route.query, source: el('news-source').value, group: el('news-group').value, size: el('news-page-size').value, page: 1 }); }));
 ['venue-area', 'venue-type', 'venue-status', 'venue-sort'].forEach(id => el(id).addEventListener('change', () => { const route = parseRoute(); navigate('venues', { ...route.query, area: el('venue-area').value, type: el('venue-type').value, status: el('venue-status').value, sort: el('venue-sort').value, page: 1 }); }));
 el('venue-list').addEventListener('click', event => { const row = event.target.closest('[data-venue-name]'); const action = event.target.closest('[data-venue-action]')?.dataset.venueAction; if (!row || !action) return; const venue = state.venues.venues.find(item => item.name === row.dataset.venueName); if (action === 'save') toggleVenueSave(venue.name); else if (action === 'ics') downloadIcs(venue); });
 
@@ -3386,6 +3511,15 @@ el('pdf-inspector-toggle').addEventListener('click', () => setPdfInspector(!stat
 el('pdf-inspector-close').addEventListener('click', () => setPdfInspector(false));
 document.querySelectorAll('[data-pdf-pane-tab]').forEach(button => button.addEventListener('click', () => setPdfInspector(true, button.dataset.pdfPaneTab)));
 el('pdf-copy-page').addEventListener('click', () => copyText(state.pdfRecord?.pages?.[state.pdfPage - 1] || '', '本页文本已复制'));
+el('pdf-text-mode').addEventListener('change', event => {
+  uiSettings.readerTextMode = ['paragraphs', 'bilingual', 'plain'].includes(event.target.value) ? event.target.value : 'paragraphs';
+  applyUiSettings(); syncAppearanceControls();
+});
+el('pdf-translate-page').addEventListener('click', translatePdfCurrentPage);
+el('pdf-page-text').addEventListener('click', event => {
+  const button = event.target.closest('[data-pdf-translate-paragraph]');
+  if (button) translatePdfParagraph(Number(button.dataset.pdfTranslateParagraph));
+});
 el('pdf-reparse').addEventListener('click', reparsePdfText);
 el('pdf-ocr-page').addEventListener('click', ocrCurrentPdfPage);
 el('pdf-ocr-missing').addEventListener('click', ocrMissingPdfPages);
@@ -3625,13 +3759,20 @@ function applyUiSettings({ save = true } = {}) {
   root.dataset.uiPreset = ['classic', 'compact', 'focus', 'accessible'].includes(uiSettings.preset) ? uiSettings.preset : 'classic';
   root.dataset.density = ['comfortable', 'standard', 'compact'].includes(uiSettings.density) ? uiSettings.density : 'standard';
   root.dataset.sidebar = uiSettings.sidebar === 'collapsed' ? 'collapsed' : 'expanded';
+  uiSettings.readerControls = ['auto', 'top', 'sidebar'].includes(uiSettings.readerControls) ? uiSettings.readerControls : 'auto';
+  uiSettings.readerTextMode = ['paragraphs', 'bilingual', 'plain'].includes(uiSettings.readerTextMode) ? uiSettings.readerTextMode : 'paragraphs';
+  uiSettings.readerPane = uiSettings.readerPane === 'wide' ? 'wide' : 'standard';
   root.classList.toggle('reduce-motion', Boolean(uiSettings.reduceMotion));
   root.style.setProperty('--user-font-scale', String(Math.max(.9, Math.min(1.3, Number(uiSettings.fontScale || 1)))));
+  syncPdfReaderPreferences();
   el('theme-toggle').textContent = root.dataset.theme === 'dark' ? '切换为明亮主题' : '切换为深色主题';
   if (el('settings-ui-summary')) {
     const presetNames = { classic: '经典绿', compact: '紧凑学术', focus: '专注阅读', accessible: '高可访问' };
     const densityNames = { comfortable: '舒适', standard: '标准', compact: '紧凑' };
     el('settings-ui-summary').textContent = `${presetNames[uiSettings.preset] || '经典绿'} · ${densityNames[uiSettings.density] || '标准'} · ${Math.round(Number(uiSettings.fontScale || 1) * 100)}%`;
+    const readerControlNames = { auto: '智能侧栏', top: '顶部工具', sidebar: '侧栏工具' };
+    const readerTextNames = { paragraphs: '智能分段', bilingual: '分段对照', plain: '原始文本' };
+    el('settings-reader-summary').textContent = `${readerControlNames[uiSettings.readerControls]} · ${readerTextNames[uiSettings.readerTextMode]}`;
   }
   if (save) {
     localStorage.setItem(UI_SETTINGS_KEY, JSON.stringify(uiSettings));
@@ -3643,6 +3784,9 @@ function syncAppearanceControls() {
   el('appearance-density').value = uiSettings.density;
   el('appearance-font').value = String(uiSettings.fontScale);
   el('appearance-sidebar').value = uiSettings.sidebar;
+  el('appearance-reader-controls').value = uiSettings.readerControls;
+  el('appearance-reader-text').value = uiSettings.readerTextMode;
+  el('appearance-reader-pane').value = uiSettings.readerPane;
   el('appearance-motion').checked = Boolean(uiSettings.reduceMotion);
   document.querySelectorAll('[data-ui-preset]').forEach(button => button.classList.toggle('active', button.dataset.uiPreset === uiSettings.preset));
 }
@@ -3658,6 +3802,9 @@ function updateAppearancePreview() {
     density: el('appearance-density').value,
     fontScale: Number(el('appearance-font').value),
     sidebar: el('appearance-sidebar').value,
+    readerControls: el('appearance-reader-controls').value,
+    readerTextMode: el('appearance-reader-text').value,
+    readerPane: el('appearance-reader-pane').value,
     reduceMotion: el('appearance-motion').checked
   };
   applyUiSettings({ save: false });
@@ -3673,7 +3820,7 @@ document.querySelectorAll('[data-ui-preset]').forEach(button => button.addEventL
   syncAppearanceControls();
   applyUiSettings({ save: false });
 }));
-['appearance-theme', 'appearance-density', 'appearance-font', 'appearance-sidebar'].forEach(id => el(id).addEventListener('change', updateAppearancePreview));
+['appearance-theme', 'appearance-density', 'appearance-font', 'appearance-sidebar', 'appearance-reader-controls', 'appearance-reader-text', 'appearance-reader-pane'].forEach(id => el(id).addEventListener('change', updateAppearancePreview));
 el('appearance-motion').addEventListener('change', updateAppearancePreview);
 el('appearance-save').addEventListener('click', () => { updateAppearancePreview(); applyUiSettings(); appearanceSnapshot = null; closeModal('appearance-modal'); toast('界面配置已保存'); });
 el('appearance-reset').addEventListener('click', () => { uiSettings = { ...UI_DEFAULTS, preset: 'classic' }; applyUiSettings(); appearanceSnapshot = { ...uiSettings }; syncAppearanceControls(); toast('已恢复经典绿设置'); });
@@ -3681,6 +3828,7 @@ matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { 
 window.addEventListener('scroll', () => el('backtop').classList.toggle('show', window.scrollY > 500)); el('backtop').addEventListener('click', () => window.scrollTo({ top: 0, behavior: 'smooth' }));
 window.addEventListener('hashchange', renderRoute); window.addEventListener('resize', () => {
   if (window.innerWidth > 720) closeMobileMore();
+  placePdfReaderControls();
   if (translationSettings.positionMode !== 'pinned' || !translationSettings.position) return;
   translationSettings.position = clampedTranslationPosition(translationSettings.position.left, translationSettings.position.top);
   if (el('translation-popover').classList.contains('open')) positionTranslationPopover(state.translationPayload?.rect || { left: 20, top: 20, bottom: 21, width: 1, height: 1 });

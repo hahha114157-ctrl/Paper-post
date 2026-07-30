@@ -1,10 +1,11 @@
-const VERSION = '6.5.0';
+const VERSION = '6.6.0';
 const CACHE = `paperscope-pages-v20-${VERSION}`;
 const SHELL = [
   './',
   `./app.js?v=${VERSION}`,
   './pdf-storage.js',
   './library-logic.js',
+  './ui-logic.js',
   './manifest.webmanifest',
   './icon.svg',
   `./vendor/pdfjs/pdf.mjs?v=${VERSION}`,
