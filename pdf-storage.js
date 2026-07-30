@@ -242,6 +242,38 @@ export async function deletePdfAttachment(paperId, attachmentId = null) {
   });
 }
 
+export async function deleteAllPdfAttachments(paperId) {
+  const removed = { documents: 0, textPages: 0, annotations: 0, importJobs: 0 };
+  await transactionResult([DOCUMENT_STORE, TEXT_STORE, ANNOTATION_STORE, IMPORT_STORE, LEGACY_STORE], 'readwrite', stores => {
+    const deleteByPaper = (store, counter) => {
+      const request = store.index('paperId').openCursor(IDBKeyRange.only(paperId));
+      request.onsuccess = event => {
+        const cursor = event.target.result;
+        if (!cursor) return;
+        cursor.delete();
+        removed[counter] += 1;
+        cursor.continue();
+      };
+    };
+    deleteByPaper(stores[DOCUMENT_STORE], 'documents');
+    deleteByPaper(stores[TEXT_STORE], 'textPages');
+    deleteByPaper(stores[ANNOTATION_STORE], 'annotations');
+    const jobs = stores[IMPORT_STORE].openCursor();
+    jobs.onsuccess = event => {
+      const cursor = event.target.result;
+      if (!cursor) return;
+      const job = cursor.value || {};
+      if ([job.paperId, job.matchedPaperId, job.resultPaperId].includes(paperId)) {
+        cursor.delete();
+        removed.importJobs += 1;
+      }
+      cursor.continue();
+    };
+    stores[LEGACY_STORE].delete(paperId);
+  });
+  return removed;
+}
+
 export async function movePdfAttachment(sourcePaperId, targetPaperId, attachmentId = null, { primary = true } = {}) {
   const bundle = await getPdfBundle(sourcePaperId, attachmentId);
   if (!bundle) return null;
