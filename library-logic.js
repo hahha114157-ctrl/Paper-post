@@ -27,8 +27,144 @@ export function setRecordRead(record, read, now = new Date().toISOString()) {
   return record;
 }
 
+export function isLibraryRecord(record) {
+  if (!record?.paper) return false;
+  return Boolean(
+    record.savedAt
+    || record.queueAt
+    || record.readAt
+    || Number(record.progress || 0) > 0
+    || record.note
+    || record.tags?.length
+    || record.highlights?.length
+    || record.collections?.length
+    || record.pdfAttachment
+    || record.pdfAttachments?.length
+    || record.archivedAt
+    || record.trashAt
+  );
+}
+
+export function isActiveRecord(record) {
+  return isLibraryRecord(record) && !record.archivedAt && !record.trashAt;
+}
+
+function normalizedCollection(collection, fallbackName, order) {
+  return {
+    name: String(collection?.name || fallbackName).trim().slice(0, 60) || fallbackName,
+    parentId: collection?.parentId || null,
+    color: /^#[0-9a-f]{6}$/i.test(collection?.color || '') ? collection.color : '#116347',
+    icon: String(collection?.icon || 'folder').slice(0, 24),
+    description: String(collection?.description || '').trim().slice(0, 180),
+    order: Number.isFinite(Number(collection?.order)) ? Number(collection.order) : order,
+    createdAt: collection?.createdAt || null
+  };
+}
+
+export function validateCollectionTree(collections = {}) {
+  const normalized = {};
+  for (const [index, [id, collection]] of Object.entries(collections || {}).entries()) {
+    if (!id || !collection || typeof collection !== 'object') continue;
+    normalized[id] = normalizedCollection(collection, `分类 ${index + 1}`, index);
+  }
+  for (const [id, collection] of Object.entries(normalized)) {
+    if (!normalized[collection.parentId] || collection.parentId === id) collection.parentId = null;
+  }
+  for (const id of Object.keys(normalized)) {
+    const path = new Set([id]);
+    let cursor = normalized[id].parentId;
+    while (cursor) {
+      if (path.has(cursor)) {
+        normalized[id].parentId = null;
+        break;
+      }
+      path.add(cursor);
+      cursor = normalized[cursor]?.parentId || null;
+    }
+  }
+  return normalized;
+}
+
+function migratedRecord(record = {}) {
+  return {
+    ...record,
+    savedAt: record.savedAt || null,
+    queueAt: record.queueAt || null,
+    readAt: record.readAt || null,
+    lastOpenedAt: record.lastOpenedAt || record.readAt || null,
+    archivedAt: record.archivedAt || null,
+    trashAt: record.trashAt || null,
+    progress: Number(record.progress || (record.readAt ? 100 : 0)),
+    tags: Array.isArray(record.tags) ? [...new Set(record.tags.filter(Boolean))] : [],
+    highlights: Array.isArray(record.highlights) ? record.highlights : [],
+    collections: Array.isArray(record.collections) ? [...new Set(record.collections.filter(Boolean))] : [],
+    pdfAttachments: Array.isArray(record.pdfAttachments)
+      ? record.pdfAttachments
+      : record.pdfAttachment
+        ? [record.pdfAttachment]
+        : []
+  };
+}
+
+export function migrateLibraryData(value, defaults, now = new Date().toISOString()) {
+  const source = value && typeof value === 'object' ? value : {};
+  const base = typeof defaults === 'function' ? defaults() : structuredClone(defaults || {});
+  const collections = validateCollectionTree(source.collections || {});
+  const records = Object.fromEntries(Object.entries(source.records || {})
+    .filter(([, record]) => record?.paper)
+    .map(([id, record]) => {
+      const migrated = migratedRecord(record);
+      migrated.collections = migrated.collections.filter(collectionId => collections[collectionId]);
+      return [id, migrated];
+    }));
+  const recent = Object.fromEntries(Object.entries(source.recent || {})
+    .filter(([, item]) => item?.paper && item?.lastOpenedAt)
+    .map(([id, item]) => [id, { paper: item.paper, lastOpenedAt: item.lastOpenedAt }]));
+  return {
+    ...base,
+    ...source,
+    version: 4,
+    migratedAt: Number(source.version || 0) < 4 ? now : source.migratedAt || null,
+    profile: { ...(base.profile || {}), ...(source.profile || {}) },
+    records,
+    recent,
+    collections,
+    savedVenues: Array.isArray(source.savedVenues) ? [...new Set(source.savedVenues.filter(Boolean))] : [],
+    dailyProgress: source.dailyProgress && typeof source.dailyProgress === 'object' ? source.dailyProgress : {},
+    vocabulary: source.vocabulary && typeof source.vocabulary === 'object' ? source.vocabulary : {}
+  };
+}
+
+export function applyBatchAction(library, ids, action, payload = {}, now = new Date().toISOString()) {
+  let changed = 0;
+  for (const id of [...new Set(ids || [])]) {
+    const record = library?.records?.[id];
+    if (!record?.paper) continue;
+    if (!['trash', 'restore'].includes(action) && record.trashAt) record.trashAt = null;
+    if (!['archive', 'trash', 'restore'].includes(action) && record.archivedAt) record.archivedAt = null;
+    if (action === 'read') setRecordRead(record, true, now);
+    else if (action === 'unread') setRecordRead(record, false, now);
+    else if (action === 'queue') record.queueAt ||= now;
+    else if (action === 'unqueue') record.queueAt = null;
+    else if (action === 'save') record.savedAt ||= now;
+    else if (action === 'unsave') record.savedAt = null;
+    else if (action === 'archive') { record.archivedAt = now; record.trashAt = null; }
+    else if (action === 'trash') { record.trashAt = now; record.archivedAt = null; }
+    else if (action === 'restore') { record.trashAt = null; record.archivedAt = null; }
+    else if (action === 'collection-add' && payload.collectionId) {
+      record.collections = [...new Set([...(record.collections || []), payload.collectionId])];
+    } else if (action === 'collection-remove' && payload.collectionId) {
+      record.collections = (record.collections || []).filter(id => id !== payload.collectionId);
+    } else {
+      continue;
+    }
+    changed += 1;
+  }
+  return changed;
+}
+
 export function libraryStatistics(library, publicationStatus) {
-  const records = Object.values(library?.records || {}).filter(record => record?.paper);
+  const records = Object.values(library?.records || {}).filter(isActiveRecord);
   return {
     saved: records.filter(record => record.savedAt).length,
     queue: records.filter(record => record.queueAt).length,
