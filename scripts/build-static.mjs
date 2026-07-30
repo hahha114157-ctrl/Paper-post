@@ -13,7 +13,10 @@ const currentYear = now.getUTCFullYear();
 const NEWS_FEEDS = [
   { name: 'OpenAI', url: 'https://openai.com/news/rss.xml' },
   { name: 'Google DeepMind', url: 'https://deepmind.google/blog/rss.xml' },
-  { name: 'Microsoft Research', url: 'https://www.microsoft.com/en-us/research/feed/' }
+  { name: 'Microsoft Research', url: 'https://www.microsoft.com/en-us/research/feed/' },
+  { name: 'NVIDIA Developer', url: 'https://developer.nvidia.com/blog/feed/' },
+  { name: 'AWS AI', url: 'https://aws.amazon.com/blogs/machine-learning/feed/' },
+  { name: 'GitHub AI', url: 'https://github.blog/ai-and-ml/feed/' }
 ];
 
 const AI_TOPICS = [
@@ -257,11 +260,41 @@ function mergePaperSources(items) {
 
 function parseFeed(xml, source) {
   const blocks = [...xml.matchAll(/<(item|entry)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/gi)].map(match => match[2]);
-  return blocks.map((block, index) => { const href = block.match(/<link[^>]*href=["']([^"']+)["'][^>]*\/?\s*>/i)?.[1]; const link = stripHtml(xmlValue(block, 'link')) || href || ''; const description = xmlValue(block, 'description') || xmlValue(block, 'summary') || xmlValue(block, 'content:encoded') || xmlValue(block, 'content'); const rawDate = xmlValue(block, 'pubDate') || xmlValue(block, 'published') || xmlValue(block, 'updated'); return { id: `news:${source}:${xmlValue(block, 'guid') || link || index}`, title: stripHtml(xmlValue(block, 'title')), summary: stripHtml(description).slice(0, 420), published: rawDate && !Number.isNaN(Date.parse(rawDate)) ? new Date(rawDate).toISOString() : null, link, source, kind: 'news' }; }).filter(item => item.title && item.link && item.published);
+  return blocks.map((block, index) => {
+    const href = block.match(/<link[^>]*href=["']([^"']+)["'][^>]*\/?\s*>/i)?.[1];
+    const link = stripHtml(xmlValue(block, 'link')) || href || '';
+    const descriptionMatch = block.match(/<(?:description|summary|content:encoded|content)(?:\s[^>]*)?>([\s\S]*?)<\/(?:description|summary|content:encoded|content)>/i);
+    const richDescription = xmlDecode(descriptionMatch?.[1] || '');
+    const description = stripHtml(richDescription);
+    const rawDate = xmlValue(block, 'pubDate') || xmlValue(block, 'published') || xmlValue(block, 'updated');
+    const enclosureTag = block.match(/<enclosure\b[^>]*>/i)?.[0] || '';
+    const imageEnclosure = /type=["']image\//i.test(enclosureTag) ? enclosureTag.match(/url=["']([^"']+)["']/i)?.[1] : '';
+    const imageCandidate = block.match(/<(?:media:content|media:thumbnail)\b[^>]+url=["']([^"']+)["'][^>]*>/i)?.[1]
+      || imageEnclosure
+      || richDescription.match(/<img[^>]+src=["']([^"']+)["'][^>]*>/i)?.[1]
+      || '';
+    let image = null;
+    if (imageCandidate) {
+      try {
+        const parsedImage = new URL(xmlDecode(imageCandidate), link);
+        if (['http:', 'https:'].includes(parsedImage.protocol)) image = parsedImage.href;
+      } catch {}
+    }
+    return {
+      id: `news:${source}:${xmlValue(block, 'guid') || link || index}`,
+      title: stripHtml(xmlValue(block, 'title')),
+      summary: description.slice(0, 420),
+      published: rawDate && !Number.isNaN(Date.parse(rawDate)) ? new Date(rawDate).toISOString() : null,
+      link,
+      image,
+      source,
+      kind: 'news'
+    };
+  }).filter(item => item.title && item.link && item.published);
 }
 async function fetchNewsFeed(feed) {
   const technical = /model|reasoning|alignment|benchmark|evaluation|research|algorithm|architecture|training|inference|robot|multimodal|vision|language|agent|foundation|safety|systems|dataset|simulation|reinforcement|processor|accelerator|memory/i;
-  return parseFeed(await fetchText(feed.url, 35_000), feed.name).filter(item => technical.test(`${item.title} ${item.summary}`)).slice(0, 12);
+  return parseFeed(await fetchText(feed.url, 35_000), feed.name).filter(item => technical.test(`${item.title} ${item.summary}`)).slice(0, 9);
 }
 function analyze(papers, topicDefs, areaLabel) {
   const topics = topicDefs.map(([name, pattern]) => ({ name, count: papers.filter(paper => pattern.test(`${paper.title} ${paper.abstract}`)).length })).sort((a, b) => b.count - a.count).filter(item => item.count).slice(0, 6); const focus = topics[0]?.name || '暂无足够数据';
