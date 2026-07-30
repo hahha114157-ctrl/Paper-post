@@ -164,7 +164,7 @@ export async function putPdfBundle(bundle) {
     stores[WORKSPACE_STORE].put({
       attachmentId,
       paperId: bundle.paperId,
-      note: bundle.workspaceNote || { text: '', images: [], updatedAt: null }
+      note: bundle.workspaceNote || { html: '', text: '', images: [], updatedAt: null }
     });
   });
   return attachmentId;
@@ -206,7 +206,7 @@ export async function getPdfBundle(paperId, preferredAttachmentId = null) {
     pages,
     ocrPages,
     annotations: annotationRow?.items || [],
-    workspaceNote: workspaceRow?.note || { text: '', images: [], updatedAt: null }
+    workspaceNote: workspaceRow?.note || { html: '', text: '', images: [], updatedAt: null }
   };
 }
 
@@ -226,6 +226,7 @@ export async function putPdfWorkspaceNote(paperId, attachmentId, note) {
       attachmentId,
       paperId,
       note: {
+        html: String(note?.html || ''),
         text: String(note?.text || ''),
         images: Array.isArray(note?.images) ? note.images : [],
         updatedAt: note?.updatedAt || new Date().toISOString()
@@ -351,7 +352,7 @@ export async function movePdfAttachment(sourcePaperId, targetPaperId, attachment
     stores[WORKSPACE_STORE].put({
       attachmentId: bundle.attachmentId,
       paperId: targetPaperId,
-      note: bundle.workspaceNote || { text: '', images: [], updatedAt: null }
+      note: bundle.workspaceNote || { html: '', text: '', images: [], updatedAt: null }
     });
     if (bundle.attachmentId === `primary:${sourcePaperId}`) stores[LEGACY_STORE].delete(sourcePaperId);
   });

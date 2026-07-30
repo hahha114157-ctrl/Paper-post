@@ -32,6 +32,8 @@ for (const id of [
   'pdf-snapshot-layer',
   'pdf-snipping-hint',
   'pdf-pane-notes',
+  'pdf-pane-resizer',
+  'pdf-search-clear',
   'pdf-workspace-editor',
   'pdf-note-add-image',
   'pdf-note-add-snapshot',
@@ -52,11 +54,16 @@ assert.match(html, /id="library-batchbar"[^>]*class="batchbar hidden"|class="bat
 assert.match(html, /\.paper-title:hover h3[\s\S]+text-decoration-color:currentColor/, 'paper titles must expose hover feedback');
 assert.match(html, /\.paper-title h3[\s\S]+cursor:pointer/, 'paper title text must keep link cursor semantics');
 assert.match(html, /\.news-card:hover \.news-extra[\s\S]+grid-template-rows:1fr/, 'news cards must expand supplemental content without runtime fetching');
+assert.match(html, /\.news-cluster-grid\{[^}]*align-items:start/, 'news grid must not stretch an inactive sibling when one card expands');
 assert.ok(html.indexOf('id="detail-link"') < html.indexOf('<div class="drawer-actions">'), 'original paper link must stay above secondary drawer actions');
 assert.match(html, /\.library-row\.selected[\s\S]+box-shadow:inset 4px 0 var\(--green\)/, 'selected library rows need a persistent visual state');
 assert.doesNotMatch(html.slice(html.lastIndexOf('<style>')), /\.page-head \.page-actions\s*\{\s*display:none/, 'final responsive overrides must keep page actions visible');
 assert.doesNotMatch(html, /id="pdf-page-text"|data-pdf-pane-tab="text"/, 'redundant PDF page-text panel must be removed');
 assert.ok(html.indexOf('<summary>更多工具</summary>') < html.indexOf('id="pdf-ocr-page"'), 'OCR must live inside the secondary tools menu');
+assert.match(html, /\.pdf-text-pane \.pdf-export-menu>div\{position:absolute/, 'secondary PDF tools must overlay instead of consuming notebook space');
+assert.match(html, /\.pdf-search-results\{position:absolute/, 'PDF search results must overlay instead of consuming notebook space');
+assert.match(html, /id="pdf-pane-resizer"[^>]*role="separator"/, 'reader pane must expose an accessible resize handle');
+assert.doesNotMatch(html, /id="pdf-note-images"/, 'notebook images must stay inline with text instead of using a bottom gallery');
 assert.match(storage, /const DOCUMENT_STORE = 'pdfDocuments'/);
 assert.match(storage, /const TEXT_STORE = 'pdfTextPages'/);
 assert.match(storage, /const ANNOTATION_STORE = 'pdfAnnotations'/);
@@ -72,10 +79,16 @@ assert.match(app, /function moveRecordsToTrash\(/, 'soft delete with undo must e
 assert.match(app, /function permanentlyDeleteRecords\(/, 'permanent delete workflow must exist');
 assert.match(app, /groupNewsItems\(filtered, groupMode\)/, 'news must be ordered into meaningful groups');
 assert.match(app, /function renderPdfWorkspaceNote\(/, 'PDF reader must expose a persistent notebook');
+assert.match(app, /function insertPdfWorkspaceFigure\([\s\S]+range\.startContainer[\s\S]+block\.after\(figure, paragraph\)/, 'notebook images must be inserted at the active document position');
+assert.match(app, /function sanitizePdfWorkspaceHtml\(/, 'rich notebook persistence must sanitize stored HTML');
+assert.match(app, /function applyPdfPaneWidth\([\s\S]+PDF_PANE_WIDTH_KEY/, 'reader pane resizing must be bounded and persisted');
+assert.match(app, /function pdfSearchMatchesForPage\([\s\S]+while \(query[\s\S]+matches\.push/, 'PDF search must retain every exact normalized occurrence');
+assert.match(app, /function renderPdfSearchHighlightsForStack\([\s\S]+pdf-search-mark/, 'PDF search matches must be highlighted on the rendered page');
 assert.match(app, /function placePdfReaderControls\([\s\S]+sideSlot\.append\(config\)/, 'PDF controls must stay in the left sidebar');
 assert.match(app, /function createPdfSnapshot\([\s\S]+canvas\.toBlob[\s\S]+URL\.createObjectURL[\s\S]+blob/, 'PDF screenshot selections must remain available for floating comparison and notes');
 assert.match(app, /pdfSnapshots\.length >= 4/, 'temporary screenshot windows must remain bounded');
 assert.match(app, /PDF_NOTE_MAX_IMAGES = 12[\s\S]+PDF_NOTE_MAX_BYTES = 8 \* 1024 \* 1024/, 'image notes must have explicit capacity limits');
+assert.match(storage, /html: String\(note\?\.html \|\| ''\)/, 'rich notebook HTML must be persisted in its dedicated store');
 assert.doesNotMatch(app, /TRANSLATION_HISTORY_KEY|rememberTranslation|translationHistory/, 'redundant translation history persistence must be removed');
 assert.match(uiLogic, /export function segmentReaderText\(/, 'reader text segmentation must remain independently testable');
 assert.match(uiLogic, /export function groupNewsItems\(/, 'news grouping must remain independently testable');
