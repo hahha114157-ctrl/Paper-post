@@ -30,13 +30,16 @@ import {
   validateCollectionTree
 } from './library-logic.js';
 import {
+  clampPdfNoteFontSize,
+  clampPdfNoteImageWidth,
+  clampPdfZoomPercent,
   cleanNewsSource,
   groupNewsItems,
   limitTranslationCache,
   segmentReaderText
 } from './ui-logic.js';
 
-const APP_VERSION = '6.9.0';
+const APP_VERSION = '6.10.0';
 const STORAGE_KEY = 'paperscope-library-v4';
 const V3_STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
@@ -48,6 +51,7 @@ const LEGACY_TRANSLATION_SETTINGS_KEY = 'paperscope-translation-settings-v1';
 const TRANSLATION_CACHE_KEY = 'paperscope-translation-cache-v2';
 const LEGACY_TRANSLATION_CACHE_KEY = 'paperscope-translation-cache-v1';
 const PDF_VIEW_MODE_KEY = 'paperscope-pdf-view-mode-v1';
+const PDF_ZOOM_KEY = 'paperscope-pdf-zoom-v1';
 const PDF_INSPECTOR_OPEN_KEY = 'paperscope-pdf-inspector-open-v1';
 const PDF_INSPECTOR_TAB_KEY = 'paperscope-pdf-inspector-tab-v1';
 const PDF_PANE_WIDTH_KEY = 'paperscope-pdf-pane-width-v1';
@@ -93,9 +97,9 @@ const state = {
   dictionaryManifest: null, dictionaryDomain: null, dictionaryShards: new Map(), dictionaryDownloadController: null,
   translationDrag: null,
   pdfModule: null, pdfLibModule: null, tesseractModule: null, ocrWorker: null,
-  pdfLoadingTask: null, pdfDocument: null, pdfRecord: null, pdfPaperId: null, pdfPage: 1, pdfScale: 1.4, pdfRenderTask: null,
+  pdfLoadingTask: null, pdfDocument: null, pdfRecord: null, pdfPaperId: null, pdfPage: 1, pdfScale: clampPdfZoomPercent(localStorage.getItem(PDF_ZOOM_KEY)) / 100, pdfRenderTask: null,
   pdfTextContent: null, pdfSelection: null, pdfAnnotationMode: null, pdfAnnotationDraft: null, pdfTextSelectionDraft: null, pdfBrowseSelection: null, pdfSuppressWordClick: false, pdfAnnotationHistory: [], libraryPdfMatches: null,
-  pdfSnapshots: [], pdfSnapshotDrag: null, pdfSnapshotZ: 45, pdfNoteSaveTimer: null, pdfNoteDirty: false, pdfNoteRange: null,
+  pdfSnapshots: [], pdfSnapshotDrag: null, pdfSnapshotZ: 45, pdfNoteSaveTimer: null, pdfNoteDirty: false, pdfNoteRange: null, pdfZoomTimer: null,
   pdfPaneWidth: Number(localStorage.getItem(PDF_PANE_WIDTH_KEY)) || null, pdfPaneResize: null,
   pdfSearchQuery: '', pdfSearchMatches: [], pdfSearchIndex: -1,
   pdfViewMode: localStorage.getItem(PDF_VIEW_MODE_KEY) === 'paged' ? 'paged' : 'continuous',
@@ -143,7 +147,7 @@ const UI_DEFAULTS = {
   fontScale: 1,
   sidebar: 'expanded',
   readerPane: 'standard',
-  noteFont: 'standard',
+  noteFontSize: 14,
   reduceMotion: matchMedia('(prefers-reduced-motion: reduce)').matches
 };
 let uiSettings = { ...UI_DEFAULTS, ...readJson(UI_SETTINGS_KEY, {}) };
@@ -1345,7 +1349,8 @@ async function openPdfReader(paperId) {
     state.pdfDocument = await state.pdfLoadingTask.promise;
     state.pdfRecord = stored; state.pdfPaperId = paperId;
     state.pdfPage = Math.max(1, Math.min(stored.pageCount, Number(getRecord(paperId)?.pdfAttachment?.lastPage || 1)));
-    state.pdfScale = Number(el('pdf-zoom').value || 1.4);
+    state.pdfScale = clampPdfZoomPercent(localStorage.getItem(PDF_ZOOM_KEY), state.pdfScale * 100) / 100;
+    syncPdfZoomControls();
     state.pdfColumnTemplate = null;
     clearPdfBrowseSelection();
     state.pdfAnnotationHistory = []; state.pdfAnnotationMode = null; state.pdfSelection = null;
@@ -1489,6 +1494,27 @@ function updatePdfCurrentPage(pageNumber, { save = true } = {}) {
   const readyLabel = state.pdfAnnotationMode ? '页面工具已启用' : translationSettings.enabled ? '可选择文字翻译' : '可选择文字、复制、标注或截图';
   setPdfProgress(100, text ? `第 ${state.pdfPage} 页 · ${readyLabel}` : `第 ${state.pdfPage} 页 · 未检测到文本层`);
 }
+function syncPdfZoomControls(percent = clampPdfZoomPercent(state.pdfScale * 100)) {
+  const value = String(clampPdfZoomPercent(percent));
+  if (el('pdf-zoom')) el('pdf-zoom').value = value;
+  if (el('pdf-zoom-range')) el('pdf-zoom-range').value = value;
+  if (el('pdf-zoom-output')) el('pdf-zoom-output').textContent = `${value}%`;
+}
+async function applyPdfZoomPercent(value, { render = true } = {}) {
+  const percent = clampPdfZoomPercent(value, state.pdfScale * 100);
+  clearTimeout(state.pdfZoomTimer); state.pdfZoomTimer = null;
+  state.pdfScale = percent / 100;
+  localStorage.setItem(PDF_ZOOM_KEY, String(percent));
+  syncPdfZoomControls(percent);
+  if (render && state.pdfDocument) await renderPdfPage();
+}
+function schedulePdfZoom(value) {
+  const percent = clampPdfZoomPercent(value, state.pdfScale * 100);
+  state.pdfScale = percent / 100;
+  syncPdfZoomControls(percent);
+  clearTimeout(state.pdfZoomTimer);
+  state.pdfZoomTimer = setTimeout(() => applyPdfZoomPercent(percent), 140);
+}
 async function renderPdfPage() {
   if (!state.pdfDocument || !state.pdfRecord) return;
   clearPdfPageObservers();
@@ -1620,6 +1646,9 @@ function renderPdfAnnotationLayer(viewport, pageNumber = state.pdfPage, layer = 
   layer.replaceChildren();
   layer.style.width = `${viewport.width}px`; layer.style.height = `${viewport.height}px`;
   const annotations = currentPdfAnnotations();
+  const highlightSurface = document.createElement('div');
+  highlightSurface.className = 'pdf-highlight-surface';
+  layer.append(highlightSurface);
   for (const annotation of annotations.filter(item => item.page === pageNumber)) {
     const number = annotations.indexOf(annotation) + 1;
     for (const rect of annotation.rects || []) {
@@ -1628,9 +1657,9 @@ function renderPdfAnnotationLayer(viewport, pageNumber = state.pdfPage, layer = 
       mark.dataset.annotationId = annotation.id; mark.dataset.number = String(number);
       mark.title = annotation.comment || annotation.text || `标注 ${number}`;
       mark.style.left = `${rect.x * 100}%`; mark.style.top = `${rect.y * 100}%`; mark.style.width = `${rect.width * 100}%`; mark.style.height = `${rect.height * 100}%`;
-      const color = pdfAnnotationColor(annotation.color, annotation.type === 'highlight' ? .34 : .12);
+      const color = pdfAnnotationColor(annotation.color, annotation.type === 'highlight' ? 1 : .12);
       mark.style.background = color.css; mark.style.borderColor = color.css.replace(/,[\d.]+\)$/, ',1)');
-      layer.appendChild(mark);
+      (annotation.type === 'highlight' ? highlightSurface : layer).appendChild(mark);
     }
   }
   layer.classList.toggle('drawing', ['area', 'area-note', 'snapshot'].includes(state.pdfAnnotationMode));
@@ -1669,7 +1698,9 @@ function placePdfReaderControls() {
 }
 function syncPdfReaderPreferences() {
   document.documentElement.dataset.readerPane = uiSettings.readerPane === 'wide' ? 'wide' : 'standard';
-  document.documentElement.dataset.noteFont = uiSettings.noteFont === 'large' ? 'large' : 'standard';
+  uiSettings.noteFontSize = clampPdfNoteFontSize(uiSettings.noteFontSize, uiSettings.noteFont === 'large' ? 16 : 14);
+  document.documentElement.style.setProperty('--pdf-note-font-size', `${uiSettings.noteFontSize}px`);
+  if (el('pdf-note-font-size')) el('pdf-note-font-size').value = String(uiSettings.noteFontSize);
   placePdfReaderControls();
   applyPdfPaneWidth();
 }
@@ -1756,6 +1787,7 @@ function sanitizePdfWorkspaceHtml(html = '') {
     if (node.tagName === 'FIGURE') {
       element.className = 'pdf-note-figure';
       element.dataset.pdfNoteImage = String(node.dataset.pdfNoteImage || `note-image-${Date.now()}-${imageCount}`).slice(0, 120);
+      element.dataset.pdfNoteWidth = String(clampPdfNoteImageWidth(node.dataset.pdfNoteWidth));
     }
     [...node.childNodes].forEach(child => element.append(clean(child)));
     return element;
@@ -1799,16 +1831,28 @@ function decoratePdfWorkspaceEditor(editor = el('pdf-workspace-editor')) {
   for (const figure of editor.querySelectorAll('figure')) {
     figure.className = 'pdf-note-figure';
     figure.dataset.pdfNoteImage ||= crypto.randomUUID ? crypto.randomUUID() : `note-image-${Date.now()}`;
+    figure.dataset.pdfNoteWidth = String(clampPdfNoteImageWidth(figure.dataset.pdfNoteWidth));
+    figure.style.setProperty('--pdf-note-image-width', `${figure.dataset.pdfNoteWidth}%`);
     figure.contentEditable = 'false';
     if (!figure.querySelector('figcaption')) {
       const caption = document.createElement('figcaption');
       caption.textContent = figure.querySelector('img')?.alt || '阅读笔记图片';
       figure.append(caption);
     }
-    if (!figure.querySelector('[data-pdf-note-image-action="delete"]')) {
-      const remove = document.createElement('button'); remove.type = 'button';
-      remove.dataset.pdfNoteImageAction = 'delete'; remove.textContent = '删除';
-      figure.append(remove);
+    if (!figure.querySelector('[data-pdf-note-image-controls]')) {
+      const controls = document.createElement('div'); controls.className = 'pdf-note-figure-actions';
+      controls.dataset.pdfNoteImageControls = '';
+      const actions = [
+        ['shrink', '−', '缩小图片'],
+        ['grow', '+', '放大图片'],
+        ['delete', '删除', '删除图片']
+      ];
+      for (const [action, label, title] of actions) {
+        const button = document.createElement('button'); button.type = 'button';
+        button.dataset.pdfNoteImageAction = action; button.textContent = label;
+        button.title = title; button.setAttribute('aria-label', title); controls.append(button);
+      }
+      figure.append(controls);
     }
   }
 }
@@ -1838,7 +1882,7 @@ function updatePdfWorkspaceTextFromEditor() {
   const note = currentPdfWorkspaceNote(); const editor = el('pdf-workspace-editor');
   if (!note || !editor) return;
   const clone = editor.cloneNode(true);
-  clone.querySelectorAll('[data-pdf-note-image-action]').forEach(node => node.remove());
+  clone.querySelectorAll('[data-pdf-note-image-controls],[data-pdf-note-image-action]').forEach(node => node.remove());
   clone.querySelectorAll('[contenteditable]').forEach(node => node.removeAttribute('contenteditable'));
   note.html = sanitizePdfWorkspaceHtml(clone.innerHTML);
   note.text = String(clone.textContent || '').replace(/\u00a0/g, ' ').slice(0, 200_000);
@@ -1889,12 +1933,11 @@ function insertPdfWorkspaceFigure(image) {
   editor.focus({ preventScroll: true });
   const range = restorePdfWorkspaceRange();
   const figure = document.createElement('figure'); figure.className = 'pdf-note-figure';
-  figure.dataset.pdfNoteImage = image.id; figure.contentEditable = 'false';
+  figure.dataset.pdfNoteImage = image.id; figure.dataset.pdfNoteWidth = '100'; figure.contentEditable = 'false';
   const img = document.createElement('img'); img.src = image.dataUrl; img.alt = image.name || '阅读笔记图片';
   const caption = document.createElement('figcaption'); caption.textContent = image.name || '阅读笔记图片';
-  const remove = document.createElement('button'); remove.type = 'button'; remove.dataset.pdfNoteImageAction = 'delete'; remove.textContent = '删除';
-  figure.append(img, caption, remove);
-  range.deleteContents(); range.collapse(true);
+  figure.append(img, caption);
+  range.collapse(true);
   const anchor = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
   const block = anchor?.closest?.('p,div,h2,h3,blockquote,li');
   let paragraph = document.createElement(block?.tagName === 'H2' || block?.tagName === 'H3' ? block.tagName.toLowerCase() : 'p');
@@ -1921,6 +1964,7 @@ function insertPdfWorkspaceFigure(image) {
   } else {
     paragraph.append(document.createElement('br')); editor.append(figure, paragraph);
   }
+  decoratePdfWorkspaceEditor(editor);
   const nextRange = document.createRange(); nextRange.selectNodeContents(paragraph); nextRange.collapse(true);
   const selection = window.getSelection(); selection.removeAllRanges(); selection.addRange(nextRange);
   state.pdfNoteRange = nextRange.cloneRange();
@@ -3974,7 +4018,15 @@ el('pdf-view-mode').addEventListener('change', async event => {
   cancelPdfAnnotationInteraction({ quiet: true }); await renderPdfPage();
   toast(state.pdfViewMode === 'continuous' ? '已切换为上下连续滚动' : '已切换为单页翻页');
 });
-el('pdf-zoom').addEventListener('change', async event => { state.pdfScale = Number(event.target.value); await renderPdfPage(); });
+el('pdf-zoom-range').addEventListener('input', event => schedulePdfZoom(event.target.value));
+el('pdf-zoom-range').addEventListener('change', event => applyPdfZoomPercent(event.target.value));
+el('pdf-zoom').addEventListener('change', event => applyPdfZoomPercent(event.target.value));
+el('pdf-zoom').addEventListener('keydown', event => {
+  if (event.key !== 'Enter') return;
+  event.preventDefault();
+  applyPdfZoomPercent(event.currentTarget.value);
+  event.currentTarget.blur();
+});
 el('pdf-search-button').addEventListener('click', () => searchPdfText({ advanceIfSame: true }));
 el('pdf-search-clear').addEventListener('click', () => clearPdfSearch());
 el('pdf-search-input').addEventListener('input', event => { if (!event.currentTarget.value.trim()) clearPdfSearch({ clearInput: false }); });
@@ -4030,12 +4082,33 @@ el('pdf-workspace-editor').addEventListener('input', schedulePdfWorkspaceSave);
 el('pdf-workspace-editor').addEventListener('keyup', rememberPdfWorkspaceRange);
 el('pdf-workspace-editor').addEventListener('mouseup', rememberPdfWorkspaceRange);
 el('pdf-workspace-editor').addEventListener('click', async event => {
-  if (event.target.closest('[data-pdf-note-image-action]')?.dataset.pdfNoteImageAction !== 'delete') return;
+  const action = event.target.closest('[data-pdf-note-image-action]')?.dataset.pdfNoteImageAction;
+  if (!action) return;
   const figure = event.target.closest('[data-pdf-note-image]');
-  if (!figure || !confirm('从阅读笔记中删除这张图片？')) return;
+  if (!figure) return;
+  if (action === 'shrink' || action === 'grow') {
+    const delta = action === 'grow' ? 15 : -15;
+    figure.dataset.pdfNoteWidth = String(clampPdfNoteImageWidth(Number(figure.dataset.pdfNoteWidth) + delta));
+    figure.style.setProperty('--pdf-note-image-width', `${figure.dataset.pdfNoteWidth}%`);
+    schedulePdfWorkspaceSave();
+    return;
+  }
+  if (action !== 'delete') return;
+  const targetPaperId = state.pdfPaperId;
+  const savedFigure = figure.cloneNode(true);
   const paragraph = document.createElement('p'); paragraph.append(document.createElement('br'));
   figure.replaceWith(paragraph); state.pdfNoteDirty = true;
   await savePdfWorkspaceNote({ quiet: true });
+  toast('图片已从阅读笔记中删除', {
+    actionLabel: '撤销',
+    duration: 5000,
+    onAction: () => {
+      if (state.pdfPaperId !== targetPaperId || !paragraph.isConnected) return toast('已切换文档，无法撤销图片删除');
+      paragraph.replaceWith(savedFigure);
+      decoratePdfWorkspaceEditor();
+      schedulePdfWorkspaceSave();
+    }
+  });
 });
 el('pdf-pane-notes').querySelector('.pdf-note-toolbar').addEventListener('mousedown', event => {
   if (event.target.closest('button')) event.preventDefault();
@@ -4045,6 +4118,12 @@ el('pdf-pane-notes').querySelector('.pdf-note-toolbar').addEventListener('click'
   el('pdf-workspace-editor').focus({ preventScroll: true }); restorePdfWorkspaceRange();
   document.execCommand(button.dataset.pdfNoteCommand, false, button.dataset.pdfNoteValue || null);
   rememberPdfWorkspaceRange(); schedulePdfWorkspaceSave();
+});
+el('pdf-note-font-size').addEventListener('change', event => {
+  uiSettings.noteFontSize = clampPdfNoteFontSize(event.target.value);
+  applyUiSettings();
+  if (el('appearance-note-font')) el('appearance-note-font').value = String(uiSettings.noteFontSize);
+  toast(`阅读笔记字号已调整为 ${uiSettings.noteFontSize}px`);
 });
 el('pdf-note-add-image').addEventListener('click', () => el('pdf-note-image-file').click());
 el('pdf-note-image-file').addEventListener('change', async event => {
@@ -4056,6 +4135,9 @@ el('pdf-note-export').addEventListener('click', exportPdfWorkspaceNote);
 el('pdf-reparse').addEventListener('click', reparsePdfText);
 el('pdf-ocr-page').addEventListener('click', ocrCurrentPdfPage);
 el('pdf-ocr-missing').addEventListener('click', ocrMissingPdfPages);
+document.querySelector('.pdf-export-menu').addEventListener('click', event => {
+  if (event.target.closest('button')) event.currentTarget.removeAttribute('open');
+});
 document.querySelectorAll('[data-pdf-tool]').forEach(button => button.addEventListener('click', () => applyOrTogglePdfAnnotationTool(button.dataset.pdfTool)));
 el('pdf-snapshot-page').addEventListener('click', () => createPdfSnapshot(state.pdfPage, { x: 0, y: 0, width: 1, height: 1 }));
 el('pdf-cancel-annotation').addEventListener('click', () => cancelPdfAnnotationInteraction());
@@ -4213,7 +4295,25 @@ el('pdf-annotation-list').addEventListener('click', async event => {
   if (!annotation) return;
   if (action === 'goto') { await goToPdfPage(annotation.page); renderPdfAnnotationList(id); }
   else if (action === 'comment') { const comment = prompt('编辑批注：', annotation.comment || ''); if (comment !== null) { annotation.comment = comment.trim(); annotation.updatedAt = new Date().toISOString(); await persistPdfRecord(); renderPdfAnnotationList(id); } }
-  else if (action === 'delete' && confirm('删除这条 PDF 标注？')) { state.pdfRecord.annotations = currentPdfAnnotations().filter(value => value.id !== id); await persistPdfRecord(); renderPdfAnnotationLayerForPage(annotation.page); renderPdfAnnotationList(); }
+  else if (action === 'delete') {
+    const index = currentPdfAnnotations().findIndex(value => value.id === id);
+    if (index < 0) return;
+    const targetRecord = state.pdfRecord; const targetPaperId = state.pdfPaperId;
+    const historyIndex = state.pdfAnnotationHistory.lastIndexOf(id);
+    if (historyIndex >= 0) state.pdfAnnotationHistory.splice(historyIndex, 1);
+    state.pdfRecord.annotations.splice(index, 1);
+    await persistPdfRecord(); renderPdfAnnotationLayerForPage(annotation.page); renderPdfAnnotationList();
+    toast('PDF 标注已删除', {
+      actionLabel: '撤销',
+      duration: 5000,
+      onAction: async () => {
+        if (state.pdfRecord !== targetRecord || state.pdfPaperId !== targetPaperId) return toast('已切换文档，无法撤销标注删除');
+        state.pdfRecord.annotations.splice(Math.max(0, index), 0, annotation);
+        state.pdfAnnotationHistory.push(annotation.id);
+        await persistPdfRecord(); renderPdfAnnotationLayerForPage(annotation.page); renderPdfAnnotationList(annotation.id);
+      }
+    });
+  }
 });
 el('save-note').addEventListener('click', () => { const record = ensureRecord(getPaper(state.selectedPaperId)); record.note = el('paper-note').value.trim(); record.tags = [...new Set(el('paper-tags').value.split(/[,，]/).map(value => value.trim()).filter(Boolean))].slice(0, 12); record.progress = Number(el('reading-progress').value); if (record.progress === 100) record.readAt ||= new Date().toISOString(); else record.readAt = null; saveLibrary(); toast('阅读记录已保存'); });
 el('add-to-collection').addEventListener('click', () => { const collectionId = el('paper-collection').value; if (!collectionId) return toast('请先选择分类'); const record = ensureRecord(getPaper(state.selectedPaperId)); record.trashAt = null; record.archivedAt = null; if (!record.collections.includes(collectionId)) record.collections.push(collectionId); saveLibrary(); toast('已加入分类'); });
@@ -4341,7 +4441,8 @@ function applyUiSettings({ save = true } = {}) {
   root.dataset.density = ['comfortable', 'standard', 'compact'].includes(uiSettings.density) ? uiSettings.density : 'standard';
   root.dataset.sidebar = uiSettings.sidebar === 'collapsed' ? 'collapsed' : 'expanded';
   uiSettings.readerPane = uiSettings.readerPane === 'wide' ? 'wide' : 'standard';
-  uiSettings.noteFont = uiSettings.noteFont === 'large' ? 'large' : 'standard';
+  uiSettings.noteFontSize = clampPdfNoteFontSize(uiSettings.noteFontSize, uiSettings.noteFont === 'large' ? 16 : 14);
+  delete uiSettings.noteFont;
   root.classList.toggle('reduce-motion', Boolean(uiSettings.reduceMotion));
   root.style.setProperty('--user-font-scale', String(Math.max(.9, Math.min(1.3, Number(uiSettings.fontScale || 1)))));
   syncPdfReaderPreferences();
@@ -4350,7 +4451,7 @@ function applyUiSettings({ save = true } = {}) {
     const presetNames = { classic: '经典绿', compact: '紧凑学术', focus: '专注阅读', accessible: '高可访问' };
     const densityNames = { comfortable: '舒适', standard: '标准', compact: '紧凑' };
     el('settings-ui-summary').textContent = `${presetNames[uiSettings.preset] || '经典绿'} · ${densityNames[uiSettings.density] || '标准'} · ${Math.round(Number(uiSettings.fontScale || 1) * 100)}%`;
-    el('settings-reader-summary').textContent = `左侧工具 · ${uiSettings.readerPane === 'wide' ? '宽松' : '紧凑'} · 笔记${uiSettings.noteFont === 'large' ? '较大字号' : '标准字号'}`;
+    el('settings-reader-summary').textContent = `左侧工具 · ${uiSettings.readerPane === 'wide' ? '宽松' : '紧凑'} · 笔记 ${uiSettings.noteFontSize}px`;
   }
   if (save) {
     localStorage.setItem(UI_SETTINGS_KEY, JSON.stringify(uiSettings));
@@ -4363,7 +4464,7 @@ function syncAppearanceControls() {
   el('appearance-font').value = String(uiSettings.fontScale);
   el('appearance-sidebar').value = uiSettings.sidebar;
   el('appearance-reader-pane').value = uiSettings.readerPane;
-  el('appearance-note-font').value = uiSettings.noteFont;
+  el('appearance-note-font').value = String(clampPdfNoteFontSize(uiSettings.noteFontSize));
   el('appearance-motion').checked = Boolean(uiSettings.reduceMotion);
   document.querySelectorAll('[data-ui-preset]').forEach(button => button.classList.toggle('active', button.dataset.uiPreset === uiSettings.preset));
 }
@@ -4380,7 +4481,7 @@ function updateAppearancePreview() {
     fontScale: Number(el('appearance-font').value),
     sidebar: el('appearance-sidebar').value,
     readerPane: el('appearance-reader-pane').value,
-    noteFont: el('appearance-note-font').value,
+    noteFontSize: clampPdfNoteFontSize(el('appearance-note-font').value),
     reduceMotion: el('appearance-motion').checked
   };
   applyUiSettings({ save: false });

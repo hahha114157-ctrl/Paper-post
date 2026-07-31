@@ -37,7 +37,9 @@ for (const id of [
   'pdf-workspace-editor',
   'pdf-note-add-image',
   'pdf-note-add-snapshot',
+  'pdf-note-font-size',
   'pdf-note-export',
+  'pdf-zoom-range',
   'install-app-state',
   'appearance-note-font'
 ]) assert.match(html, new RegExp(`id="${id}"`), `${id} must exist`);
@@ -61,6 +63,9 @@ assert.doesNotMatch(html.slice(html.lastIndexOf('<style>')), /\.page-head \.page
 assert.doesNotMatch(html, /id="pdf-page-text"|data-pdf-pane-tab="text"/, 'redundant PDF page-text panel must be removed');
 assert.ok(html.indexOf('<summary>更多工具</summary>') < html.indexOf('id="pdf-ocr-page"'), 'OCR must live inside the secondary tools menu');
 assert.match(html, /\.pdf-text-pane \.pdf-export-menu>div\{position:absolute/, 'secondary PDF tools must overlay instead of consuming notebook space');
+assert.match(html, /\.pdf-export-menu,[^{]+\{user-select:none/, 'secondary PDF tool labels must not become text selections during rapid clicks');
+assert.match(html, /id="pdf-zoom" type="number"[\s\S]+id="pdf-zoom-output"/, 'PDF zoom must support typed percentages and a live slider value');
+assert.match(html, /class="small pdf-tool-button"[\s\S]+<kbd>H<\/kbd>/, 'annotation shortcuts must be visually separated from tool labels');
 assert.match(html, /\.pdf-search-results\{position:absolute/, 'PDF search results must overlay instead of consuming notebook space');
 assert.match(html, /id="pdf-pane-resizer"[^>]*role="separator"/, 'reader pane must expose an accessible resize handle');
 assert.doesNotMatch(html, /id="pdf-note-images"/, 'notebook images must stay inline with text instead of using a bottom gallery');
@@ -80,6 +85,11 @@ assert.match(app, /function permanentlyDeleteRecords\(/, 'permanent delete workf
 assert.match(app, /groupNewsItems\(filtered, groupMode\)/, 'news must be ordered into meaningful groups');
 assert.match(app, /function renderPdfWorkspaceNote\(/, 'PDF reader must expose a persistent notebook');
 assert.match(app, /function insertPdfWorkspaceFigure\([\s\S]+range\.startContainer[\s\S]+block\.after\(figure, paragraph\)/, 'notebook images must be inserted at the active document position');
+assert.match(app, /figure\.dataset\.pdfNoteWidth[\s\S]+clampPdfNoteImageWidth/, 'inline notebook images must preserve an adjustable width');
+assert.match(app, /function applyPdfZoomPercent\([\s\S]+PDF_ZOOM_KEY/, 'typed PDF zoom must be bounded and persisted');
+assert.match(app, /PDF 标注已删除[\s\S]+actionLabel: '撤销'/, 'PDF annotation deletion must be immediate and undoable');
+assert.doesNotMatch(app, /action === 'delete' && confirm\('删除这条 PDF 标注/, 'PDF annotation deletion must not use a browser confirmation dialog');
+assert.match(app, /pdf-highlight-surface/, 'PDF highlights must share one compositing surface so overlaps do not darken repeatedly');
 assert.match(app, /function sanitizePdfWorkspaceHtml\(/, 'rich notebook persistence must sanitize stored HTML');
 assert.match(app, /function applyPdfPaneWidth\([\s\S]+PDF_PANE_WIDTH_KEY/, 'reader pane resizing must be bounded and persisted');
 assert.match(app, /function pdfSearchMatchesForPage\([\s\S]+while \(query[\s\S]+matches\.push/, 'PDF search must retain every exact normalized occurrence');
@@ -93,6 +103,7 @@ assert.doesNotMatch(app, /TRANSLATION_HISTORY_KEY|rememberTranslation|translatio
 assert.match(uiLogic, /export function segmentReaderText\(/, 'reader text segmentation must remain independently testable');
 assert.match(uiLogic, /export function groupNewsItems\(/, 'news grouping must remain independently testable');
 assert.match(uiLogic, /export function limitTranslationCache\(/, 'translation cache capacity must remain independently testable');
+assert.match(uiLogic, /export function clampPdfZoomPercent\(/, 'typed PDF zoom bounds must remain independently testable');
 for (const source of ['NVIDIA Developer', 'AWS AI', 'GitHub AI']) assert.match(buildScript, new RegExp(source), `${source} official feed must be configured`);
 assert.match(app, /event\.key === 'Escape'[\s\S]+closeMobileMore/, 'More menu must close with Escape');
 assert.ok(Array.isArray(manifest.file_handlers) && manifest.file_handlers[0].accept['application/pdf'].includes('.pdf'));

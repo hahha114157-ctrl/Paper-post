@@ -141,3 +141,21 @@ export function limitTranslationCache(cache = {}, { maxEntries = 300, maxChars =
   }
   return limited;
 }
+
+export function clampPdfZoomPercent(value, fallback = 140) {
+  const parsed = value === null || value === undefined || String(value).trim() === '' ? Number.NaN : Number(value);
+  const safeFallback = Number.isFinite(Number(fallback)) ? Number(fallback) : 140;
+  return Math.round(Math.max(50, Math.min(400, Number.isFinite(parsed) ? parsed : safeFallback)));
+}
+
+export function clampPdfNoteFontSize(value, fallback = 14) {
+  const parsed = value === null || value === undefined || String(value).trim() === '' ? Number.NaN : Number(value);
+  const safeFallback = Number.isFinite(Number(fallback)) ? Number(fallback) : 14;
+  return Math.round(Math.max(12, Math.min(22, Number.isFinite(parsed) ? parsed : safeFallback)));
+}
+
+export function clampPdfNoteImageWidth(value, fallback = 100) {
+  const parsed = value === null || value === undefined || String(value).trim() === '' ? Number.NaN : Number(value);
+  const safeFallback = Number.isFinite(Number(fallback)) ? Number(fallback) : 100;
+  return Math.round(Math.max(35, Math.min(100, Number.isFinite(parsed) ? parsed : safeFallback)));
+}

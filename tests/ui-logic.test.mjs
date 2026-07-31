@@ -2,11 +2,27 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   classifyNewsItem,
+  clampPdfNoteFontSize,
+  clampPdfNoteImageWidth,
+  clampPdfZoomPercent,
   cleanNewsSource,
   groupNewsItems,
   limitTranslationCache,
   segmentReaderText
 } from '../ui-logic.js';
+
+test('reader controls clamp typed values to safe ranges', () => {
+  assert.equal(clampPdfZoomPercent('175'), 175);
+  assert.equal(clampPdfZoomPercent(10), 50);
+  assert.equal(clampPdfZoomPercent(900), 400);
+  assert.equal(clampPdfZoomPercent('invalid'), 140);
+  assert.equal(clampPdfZoomPercent(null), 140);
+  assert.equal(clampPdfZoomPercent(''), 140);
+  assert.equal(clampPdfNoteFontSize(18), 18);
+  assert.equal(clampPdfNoteFontSize(40), 22);
+  assert.equal(clampPdfNoteImageWidth(72), 72);
+  assert.equal(clampPdfNoteImageWidth(12), 35);
+});
 
 test('official source labels are separated from the readable source name', () => {
   assert.equal(cleanNewsSource('OpenAI.official'), 'OpenAI');

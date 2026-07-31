@@ -1,4 +1,4 @@
-const VERSION = '6.9.0';
+const VERSION = '6.10.0';
 const CACHE = `paperscope-pages-v22-${VERSION}`;
 const SHELL = [
   './',
