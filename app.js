@@ -41,7 +41,7 @@ import {
 import { buildNoteDocx } from './note-export.js';
 import { buildNotePdf } from './note-pdf-export.js';
 
-const APP_VERSION = '6.12.1';
+const APP_VERSION = '6.12.2';
 const STORAGE_KEY = 'paperscope-library-v4';
 const V3_STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';

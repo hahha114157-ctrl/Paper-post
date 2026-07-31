@@ -434,19 +434,17 @@
     html{overflow-y:scroll;scrollbar-gutter:stable}
     .route-name,.top-actions{flex:0 0 auto}
     @keyframes appear{from{opacity:.3;transform:none}}
-    .news-card{position:relative;will-change:auto;transform:none!important;overflow:visible}
-    .news-extra{position:absolute;left:0;top:calc(100% + 7px);z-index:22;width:min(560px,calc(100vw - 38px));opacity:0;visibility:hidden;clip-path:inset(0 0 100% 0 round 12px);transition:clip-path .24s ease,opacity .16s ease,visibility .24s;pointer-events:none}
-    .news-column:last-child .news-extra{left:auto;right:0}
-    .news-extra-inner{overflow:auto;max-height:min(68vh,650px);padding:15px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 18px 52px #0004;transform:translateY(-8px);transition:transform .24s ease}
-    .news-extra-content{display:grid;grid-template-columns:minmax(0,1fr);gap:13px}
+    .news-card{position:relative;will-change:auto;transform:none!important;overflow:hidden}
+    .news-extra{display:grid;grid-template-rows:0fr;opacity:0;visibility:hidden;transition:grid-template-rows .24s ease,opacity .18s ease,visibility .24s;pointer-events:none}
+    .news-extra-inner{min-height:0;overflow:hidden}
+    .news-extra-content{display:grid;grid-template-columns:minmax(150px,.9fr) minmax(0,1.15fr);gap:13px;margin-top:13px;padding-top:13px;border-top:1px solid var(--line)}
     .news-extra-content.no-image{grid-template-columns:1fr}
-    .news-extra figure{margin:0}.news-extra img{display:block;width:100%;height:auto;max-height:320px;border-radius:10px;object-fit:contain;background:var(--soft)}
+    .news-extra figure{margin:0}.news-extra img{display:block;width:100%;height:auto;max-height:300px;border-radius:10px;object-fit:contain;background:var(--soft)}
     .news-extra figcaption{margin-top:5px;color:var(--muted);font-size:8.5px;text-align:right}
     .news-extra-copy{display:grid;gap:10px}.news-extra-copy section{padding:10px 11px;border-radius:9px;background:var(--soft)}
     .news-extra strong{display:block;margin-bottom:4px;font-size:11px;color:var(--ink)}
     .news-extra span{display:block;color:var(--muted);font-size:10.5px;line-height:1.7}
-    .news-card:hover .news-extra,.news-card:focus-visible .news-extra,.news-card:focus-within .news-extra{opacity:1;visibility:visible;clip-path:inset(0 0 0 0 round 12px);pointer-events:auto}
-    .news-card:hover .news-extra-inner,.news-card:focus-visible .news-extra-inner,.news-card:focus-within .news-extra-inner{transform:none}
+    .news-card:hover .news-extra,.news-card:focus-visible .news-extra,.news-card:focus-within .news-extra{grid-template-rows:1fr;opacity:1;visibility:visible;pointer-events:auto}
     .news-card-footer{margin-top:12px}
 
     @media(min-width:721px){
@@ -473,7 +471,7 @@
       .pdf-reader{height:auto;min-height:0;grid-template-columns:1fr}.pdf-text-pane{position:absolute;z-index:9;top:8px;bottom:8px;left:8px;right:auto;width:min(278px,calc(100% - 16px));min-width:0;max-height:none;border:1px solid var(--line);border-radius:10px;box-shadow:12px 0 38px #0004}.pdf-pane-resizer{display:none}
       .pdf-canvas-stage{min-height:0;padding:12px}
       .pdf-snapshot-card{width:calc(100vw - 24px);max-width:calc(100vw - 24px);max-height:68vh;resize:none}
-      .news-extra{position:fixed;left:12px!important;right:12px!important;top:auto;bottom:74px;width:auto}.news-extra-inner{max-height:55vh}.news-extra img{max-height:260px}
+      .news-extra{grid-template-rows:1fr;opacity:1;visibility:visible;pointer-events:auto}.news-extra-content{grid-template-columns:1fr}.news-extra img{max-height:260px}
       .export-config-grid{grid-template-columns:1fr}
       .detail-open-row{align-items:flex-start}.detail-open-row .panel-note{max-width:48%;text-align:left}
     }
@@ -608,7 +606,7 @@
         <section class="card settings-card"><h2>PDF 导入中心</h2><p>批量拖放 PDF、扫描文件夹、检查重复项和恢复失败任务。</p><div class="settings-status"><div><span>导入队列</span><strong id="settings-import-summary">0 个任务</strong></div></div><div class="settings-actions"><button class="primary" id="settings-import-pdf">打开导入中心</button><button class="ghost" id="import-pdf-directory">扫描文件夹</button></div></section>
         <section class="card settings-card"><h2>备份与迁移</h2><p>完整备份包含文献索引、PDF 和标注；JSON 用于轻量迁移，不含 PDF 二进制。</p><div class="settings-actions"><button class="primary" id="export-full-backup">完整备份</button><button class="ghost" id="export-library">导出 JSON</button><button class="ghost" id="import-library">导入 JSON</button><button class="ghost" id="export-vocabulary">导出生词</button></div></section>
         <section class="card settings-card"><h2>存储与维护</h2><p>核对 IndexedDB 附件、修复断链，或清理回收站中的文献和 PDF。</p><div class="settings-status"><div><span>本地存储</span><strong id="settings-storage-summary">正在估算</strong></div><div><span>回收站</span><strong id="settings-trash-summary">0 篇</strong></div></div><div class="settings-actions"><button class="ghost" id="repair-pdf-library">附件检查</button><button class="ghost danger" id="empty-trash">清空回收站</button></div></section>
-        <section class="card settings-card" id="settings-help"><h2>个人资料、快捷键与版本</h2><p>PaperScope v6.12.1 · 数据默认只保存在当前浏览器。</p><div class="settings-status"><div><span>快速跳转</span><strong>Ctrl/⌘ + K</strong></div><div><span>关闭菜单或弹窗</span><strong>Esc</strong></div><div><span>PDF 标注 / 框选截图</span><strong>H / U / N / R / S</strong></div></div><div class="settings-actions"><button class="primary" id="settings-profile">编辑个人资料</button></div></section>
+        <section class="card settings-card" id="settings-help"><h2>个人资料、快捷键与版本</h2><p>PaperScope v6.12.2 · 数据默认只保存在当前浏览器。</p><div class="settings-status"><div><span>快速跳转</span><strong>Ctrl/⌘ + K</strong></div><div><span>关闭菜单或弹窗</span><strong>Esc</strong></div><div><span>PDF 标注 / 框选截图</span><strong>H / U / N / R / S</strong></div></div><div class="settings-actions"><button class="primary" id="settings-profile">编辑个人资料</button></div></section>
       </div>
       <input class="hidden" type="file" id="import-file" accept="application/json"><input class="hidden" type="file" id="local-pdf-file" accept="application/pdf,.pdf" multiple><input class="hidden" type="file" id="local-pdf-directory" accept="application/pdf,.pdf" multiple webkitdirectory>
     </section>
@@ -712,6 +710,6 @@
 <div class="pdf-snapshot-layer" id="pdf-snapshot-layer" aria-live="polite" aria-label="PDF 截图对照区"></div>
 <aside class="update-banner" id="update-banner" role="status" aria-live="polite"><div><strong>PaperScope 新版本已准备好</strong><span>刷新即可切换到完整新版，不会清除收藏、笔记或生词本。</span></div><div class="update-actions"><button class="primary" id="update-now">立即刷新</button><button class="ghost" id="update-later">稍后</button></div></aside>
 <button class="backtop" id="backtop" title="返回顶部">↑</button><div class="toast" id="toast"></div>
-<script type="module" src="./app.js?v=6.12.1"></script>
+<script type="module" src="./app.js?v=6.12.2"></script>
 </body>
 </html>

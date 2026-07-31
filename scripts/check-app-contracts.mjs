@@ -68,8 +68,8 @@ assert.match(html, /id="library-batchbar"[^>]*class="batchbar hidden"|class="bat
 assert.match(html, /\.paper-title:hover h3[\s\S]+text-decoration-color:currentColor/, 'paper titles must expose hover feedback');
 assert.match(html, /\.paper-title h3[\s\S]+cursor:pointer/, 'paper title text must keep link cursor semantics');
 assert.match(html, /\.news-card:hover \.news-extra[\s\S]+visibility:visible/, 'news cards must reveal supplemental content without runtime fetching');
-assert.match(html, /\.news-extra\{position:absolute/, 'news details must overlay instead of shifting either column');
-assert.match(html, /\.news-extra\{[^}]*clip-path:inset\(0 0 100%/, 'news details must keep a sliding reveal without affecting sibling layout');
+assert.match(html, /\.news-extra\{display:grid;grid-template-rows:0fr/, 'news details must slide open inside the hovered card');
+assert.match(html, /\.news-card:hover \.news-extra[\s\S]+grid-template-rows:1fr/, 'news hover must expand details with the original sliding interaction');
 assert.match(html, /html\{overflow-y:scroll;scrollbar-gutter:stable\}/, 'route changes must reserve scrollbar width and keep the library header stable');
 assert.match(html, /\.news-cluster-grid\{[^}]*align-items:start/, 'news grid must not stretch an inactive sibling when one card expands');
 assert.match(html, /\.news-column\{[^}]*align-content:start/, 'news columns must expand independently');
