@@ -41,7 +41,7 @@ import {
 import { buildNoteDocx } from './note-export.js';
 import { buildNotePdf } from './note-pdf-export.js';
 
-const APP_VERSION = '6.12.0';
+const APP_VERSION = '6.12.1';
 const STORAGE_KEY = 'paperscope-library-v4';
 const V3_STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
@@ -271,7 +271,7 @@ function syncTopSearch(route) {
 }
 function renderRoute() {
   const route = parseRoute(); if (!ROUTE_NAMES[route.name]) return navigate('home', {}, true);
-  closeTranslationPopover(); syncTopSearch(route); setActiveNav(route.name);
+  dismissIndependentTranslation(); syncTopSearch(route); setActiveNav(route.name);
   if (route.name === 'settings') { showView('settings'); renderSettingsPage(); window.scrollTo({ top: 0, behavior: 'instant' }); return; }
   if (!state.loaded) return;
   if (route.name !== 'paper') { state.returnHash = null; closeDrawer(false); }
@@ -826,7 +826,7 @@ function openDrawer(id) {
   renderDrawerActions(); renderHighlights(); renderPdfAttachmentStatus(record); renderLineagePanel(record); el('detail-lineage').textContent = record.lineage ? '刷新追溯' : '查询追溯'; updateDetailNavigation(); el('drawer-overlay').classList.add('open'); el('paper-drawer').classList.add('open'); document.body.style.overflow = 'hidden';
 }
 function closeDrawer(navigateBack = true) {
-  closeTranslationPopover(); el('drawer-overlay').classList.remove('open'); el('paper-drawer').classList.remove('open'); document.body.style.overflow = '';
+  dismissIndependentTranslation(); el('drawer-overlay').classList.remove('open'); el('paper-drawer').classList.remove('open'); document.body.style.overflow = '';
   if (navigateBack && parseRoute().name === 'paper') { const fallback = state.returnHash; state.returnHash = null; if (fallback) location.hash = fallback; else navigate(getPaper(state.selectedPaperId)?.area || 'ai'); }
 }
 function renderDrawerActions() {
@@ -1410,6 +1410,7 @@ async function openPdfReader(paperId) {
     el('pdf-meta').textContent = `${stored.fileName} · ${(stored.size / 1024 / 1024).toFixed(1)} MB · 本机存储 · ${stored.annotations.length} 条标注`;
     clearPdfSearch();
     el('pdf-modal').classList.add('open');
+    if (translationSettings.docked) moveTranslationPopoverToDock();
     state.pdfNoteDirty = false;
     renderPdfWorkspaceNote();
     applyPdfInspectorState();
@@ -1420,7 +1421,7 @@ async function openPdfReader(paperId) {
 function clearPdfPageObservers() {
   discardPdfTextSelectionDraft();
   clearPdfBrowseSelection();
-  closeTranslationPopover();
+  if (!translationSettings.docked) closeTranslationPopover();
   state.pdfContinuousObserver?.disconnect();
   state.pdfPageObserver?.disconnect();
   state.pdfContinuousObserver = null; state.pdfPageObserver = null;
@@ -2778,7 +2779,7 @@ async function addPdfSelectionAnnotation(type, capturedSelection = state.pdfSele
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
   };
   state.pdfRecord.annotations.push(annotation); state.pdfAnnotationHistory.push(annotation.id);
-  closeTranslationPopover(); clearPdfBrowseSelection(); state.pdfSelection = null; window.getSelection()?.removeAllRanges();
+  dismissIndependentTranslation(); clearPdfBrowseSelection(); state.pdfSelection = null; window.getSelection()?.removeAllRanges();
   await persistPdfRecord(); renderPdfAnnotationLayerForCurrentPage(); renderPdfAnnotationList(annotation.id); toast(`${annotationTypeLabel(type)}已保存`);
 }
 function renderPdfAnnotationLayerForPage(pageNumber = state.pdfPage) {
@@ -2803,7 +2804,7 @@ function updatePdfAnnotationMode() {
   el('pdf-tool-status').textContent = labels[state.pdfAnnotationMode] || (selected ? `已选择 ${selected.text.length} 字 · H 高亮 / U 下划线 / N 批注 / Ctrl+C 复制 / Esc 取消` : '浏览模式 · 拖选文字，S 框选截图');
   el('pdf-snipping-hint')?.classList.toggle('hidden', state.pdfAnnotationMode !== 'snapshot');
   clearTimeout(state.translationSelectionTimer);
-  if (state.pdfAnnotationMode) closeTranslationPopover();
+  if (state.pdfAnnotationMode) dismissIndependentTranslation();
 }
 function setPdfAnnotationMode(mode) {
   discardPdfTextSelectionDraft(); clearPdfBrowseSelection();
@@ -2829,7 +2830,7 @@ function cancelPdfAnnotationInteraction({ quiet = false } = {}) {
     draft.draft?.remove(); state.pdfAnnotationDraft = null;
   }
   state.pdfAnnotationMode = null; clearPdfBrowseSelection(); state.pdfSelection = null; window.getSelection()?.removeAllRanges();
-  closeTranslationPopover(); updatePdfAnnotationMode();
+  dismissIndependentTranslation(); updatePdfAnnotationMode();
   if (hadAnnotation && !quiet) toast('已取消当前工具');
   return hadInteraction;
 }
@@ -3080,6 +3081,7 @@ function closePdfReader() {
   clearPdfSearch();
   state.pdfLoadingTask?.destroy().catch(() => {});
   state.pdfLoadingTask = null; state.pdfDocument = null; state.pdfRecord = null; state.pdfPaperId = null; state.pdfTextContent = null; state.pdfSelection = null; state.pdfAnnotationMode = null;
+  if (translationSettings.docked) moveTranslationPopoverToDock();
 }
 function normalizedPdfSearchText(value = '', withMap = false) {
   let text = ''; const map = []; let whitespace = false;
@@ -3717,6 +3719,19 @@ function syncTranslationPinButton() {
     button.textContent = pinned ? '●' : '⌖';
   }
 }
+function translationDockHost() {
+  return el('pdf-modal')?.classList.contains('open') ? el('pdf-translation-dock-host') : el('top-translation-dock-host');
+}
+function restoreIndependentTranslationPopover() {
+  const popover = el('translation-popover');
+  const snapshotLayer = el('pdf-snapshot-layer');
+  if (popover && snapshotLayer && popover.parentElement !== snapshotLayer.parentElement) snapshotLayer.before(popover);
+}
+function moveTranslationPopoverToDock() {
+  const popover = el('translation-popover');
+  const host = translationDockHost();
+  if (popover && host && popover.parentElement !== host) host.append(popover);
+}
 function syncTranslationDockButton() {
   const docked = Boolean(translationSettings.docked);
   const popover = el('translation-popover'); const button = el('translation-dock');
@@ -3724,7 +3739,8 @@ function syncTranslationDockButton() {
   button?.classList.toggle('active', docked);
   button?.setAttribute('aria-pressed', String(docked));
   if (button) {
-    button.title = docked ? '从右侧边栏独立出来' : '停靠到右侧边栏';
+    button.title = docked ? '从标题栏独立出来' : '整合到标题栏右侧';
+    button.setAttribute('aria-label', docked ? '将翻译框从标题栏独立出来' : '将翻译框整合到标题栏');
     button.textContent = docked ? '↗' : '▥';
   }
 }
@@ -3734,15 +3750,18 @@ function setTranslationDocked(docked, { quiet = false } = {}) {
   saveTranslationSettings();
   const popover = el('translation-popover');
   if (docked) {
+    moveTranslationPopoverToDock();
     popover.style.left = ''; popover.style.top = '';
-  } else if (state.translationPayload?.rect) {
+  } else {
+    restoreIndependentTranslationPopover();
     translationSettings.positionMode = 'follow'; translationSettings.position = null;
-    saveTranslationSettings(); positionTranslationPopover(state.translationPayload.rect);
+    saveTranslationSettings();
+    if (state.translationPayload?.rect) positionTranslationPopover(state.translationPayload.rect);
   }
-  if (!quiet) toast(docked ? '翻译框已停靠到右侧空白区' : '翻译框已恢复为独立浮窗');
+  if (!quiet) toast(docked ? '翻译已整合到论文标题栏右侧' : '翻译框已独立出来');
 }
 function toggleTranslationDock() {
-  if (matchMedia('(max-width:720px)').matches) return toast('手机端使用底部翻译卡片，无需停靠');
+  if (matchMedia('(max-width:720px)').matches) return toast('手机端使用底部翻译卡片，无需整合到标题栏');
   setTranslationDocked(!translationSettings.docked);
 }
 function clampedTranslationPosition(left, top) {
@@ -3762,6 +3781,7 @@ function positionTranslationPopover(rect) {
   const popover = el('translation-popover'); popover.classList.add('open');
   syncTranslationDockButton();
   if (translationSettings.docked && !matchMedia('(max-width:720px)').matches) {
+    moveTranslationPopoverToDock();
     popover.style.left = ''; popover.style.top = ''; return;
   }
   if (matchMedia('(max-width:720px)').matches) {
@@ -3778,6 +3798,7 @@ function positionTranslationPopover(rect) {
 }
 function resetTranslationPosition() {
   translationSettings.position = null; translationSettings.positionMode = 'follow'; translationSettings.docked = false; saveTranslationSettings();
+  restoreIndependentTranslationPopover();
   el('translation-popover').style.left = ''; el('translation-popover').style.top = '';
   toast('翻译框已恢复为跟随选区');
 }
@@ -3796,8 +3817,11 @@ function setupTranslationDragging() {
   const handle = el('translation-drag-handle'); const popover = el('translation-popover');
   handle.addEventListener('pointerdown', event => {
     if (matchMedia('(max-width:720px)').matches || event.target.closest('button')) return;
-    if (translationSettings.docked) setTranslationDocked(false, { quiet: true });
     const box = popover.getBoundingClientRect();
+    if (translationSettings.docked) {
+      setTranslationDocked(false, { quiet: true });
+      popover.style.left = `${box.left}px`; popover.style.top = `${box.top}px`;
+    }
     state.translationDrag = { pointerId: event.pointerId, offsetX: event.clientX - box.left, offsetY: event.clientY - box.top };
     handle.setPointerCapture?.(event.pointerId); handle.classList.add('dragging'); event.preventDefault();
   });
@@ -3809,8 +3833,10 @@ function setupTranslationDragging() {
   const finish = event => {
     if (!state.translationDrag || (event.pointerId !== undefined && state.translationDrag.pointerId !== event.pointerId)) return;
     const box = popover.getBoundingClientRect(); state.translationDrag = null; handle.classList.remove('dragging');
-    if (window.innerWidth - box.right < 58) setTranslationDocked(true);
-    else { saveTranslationPosition(box.left, box.top); toast('翻译框位置已固定；拖到右侧边缘可停靠'); }
+    const zone = (el('pdf-modal')?.classList.contains('open') ? el('pdf-modal')?.querySelector('.dialog-head') : document.querySelector('.topbar'))?.getBoundingClientRect();
+    const inHeaderDockZone = zone && event.clientY >= zone.top - 24 && event.clientY <= zone.bottom + 24 && event.clientX >= zone.left + zone.width * .42;
+    if (inHeaderDockZone) setTranslationDocked(true);
+    else { saveTranslationPosition(box.left, box.top); toast('翻译框位置已固定；拖到标题栏右侧可整合'); }
   };
   handle.addEventListener('pointerup', finish); handle.addEventListener('pointercancel', finish);
 }
@@ -3825,7 +3851,7 @@ function setTranslationActions(enabled) {
   el('translation-vocabulary').disabled = !enabled;
   el('translation-note').disabled = !enabled || !state.translationPayload?.paperId;
   el('translation-online').disabled = translationSettings.mode === 'offline' || !state.translationPayload?.source;
-  el('translation-speak').disabled = !('speechSynthesis' in window) || !(state.translationPayload?.translation || state.translationPayload?.source);
+  el('translation-speak').disabled = !('speechSynthesis' in window) || !state.translationPayload?.source;
 }
 function resetTranslationResultUi() {
   el('translation-result').textContent = '';
@@ -4047,22 +4073,21 @@ function addCurrentTranslationToNote() {
   saveLibrary(); if (payload.paperId === state.selectedPaperId) el('paper-note').value = record.note; toast('译文已加入论文笔记');
 }
 function speakCurrentTranslation() {
-  const payload = state.translationPayload; const text = payload?.translation || payload?.source;
+  const payload = state.translationPayload; const text = payload?.source;
   if (!text || !('speechSynthesis' in window)) return toast('当前浏览器不支持朗读');
   if (speechSynthesis.speaking) {
-    speechSynthesis.cancel(); el('translation-speak').textContent = '朗读'; el('translation-speak').classList.remove('active'); return;
+    speechSynthesis.cancel(); el('translation-speak').textContent = '朗读英文'; el('translation-speak').classList.remove('active'); return;
   }
   speechSynthesis.cancel();
   if (speechSynthesis.paused) speechSynthesis.resume();
   const utterance = new SpeechSynthesisUtterance(text);
-  const chinese = Boolean(payload.translation);
-  utterance.lang = chinese ? 'zh-CN' : 'en-US';
+  utterance.lang = 'en-US';
   const voices = speechSynthesis.getVoices();
-  utterance.voice = voices.find(voice => voice.lang.toLowerCase().startsWith(chinese ? 'zh' : 'en')) || null;
-  utterance.rate = chinese ? .92 : .95;
+  utterance.voice = voices.find(voice => voice.lang.toLowerCase().startsWith('en')) || null;
+  utterance.rate = .95;
   const button = el('translation-speak');
   utterance.onstart = () => { button.textContent = '停止'; button.classList.add('active'); };
-  utterance.onend = utterance.onerror = () => { button.textContent = '朗读'; button.classList.remove('active'); };
+  utterance.onend = utterance.onerror = () => { button.textContent = '朗读英文'; button.classList.remove('active'); };
   speechSynthesis.speak(utterance);
 }
 async function downloadCompleteDictionary() {
@@ -4160,18 +4185,24 @@ document.addEventListener('click', event => {
   if (!event.target.closest('.pdf-search-popover')) closePdfSearchResults();
   if (!event.target.closest('.pdf-export-menu')) document.querySelector('.pdf-export-menu')?.removeAttribute('open');
 });
+function dismissIndependentTranslation() {
+  if (!translationSettings.docked && el('translation-popover').classList.contains('open')) closeTranslationPopover();
+}
 document.addEventListener('click', event => {
   if (event.target.closest('#translation-popover')) return;
   const root = event.target.closest('[data-translatable]');
   if (state.pdfSuppressWordClick && root?.classList.contains('textLayer')) return;
   if (root?.closest('#pdf-modal') && state.pdfAnnotationMode) return;
   if (!translationSettings.enabled || !translationSettings.wordClick || !root || event.detail > 1 || event.target.closest('a,button,input,textarea,select,label,[contenteditable="true"]')) {
-    if (!root && el('translation-popover').classList.contains('open')) closeTranslationPopover();
+    dismissIndependentTranslation();
     return;
   }
-  if (translationSettings.wordClickMode !== 'direct' && !event.ctrlKey && !event.metaKey) return;
+  if (translationSettings.wordClickMode !== 'direct' && !event.ctrlKey && !event.metaKey) {
+    dismissIndependentTranslation(); return;
+  }
   const selection = window.getSelection(); if (selection && !selection.isCollapsed && normalizedTranslationText(selection.toString())) return;
-  const word = wordAtPoint(event.clientX, event.clientY, root); if (word) showTranslation(word.text, word.rect, root, 'word');
+  const word = wordAtPoint(event.clientX, event.clientY, root);
+  if (word) showTranslation(word.text, word.rect, root, 'word'); else dismissIndependentTranslation();
 });
 document.addEventListener('selectionchange', () => {
   rememberPdfWorkspaceRange();
@@ -4180,7 +4211,7 @@ document.addEventListener('selectionchange', () => {
   const selection = window.getSelection();
   const anchorElement = selection?.anchorNode?.nodeType === Node.TEXT_NODE ? selection.anchorNode.parentElement : selection?.anchorNode;
   if (state.pdfAnnotationMode && anchorElement?.closest?.('#pdf-modal')) {
-    state.lastSelectionKey = ''; closeTranslationPopover(); return;
+    state.lastSelectionKey = ''; dismissIndependentTranslation(); return;
   }
   state.translationSelectionTimer = setTimeout(() => {
     const selected = translatableSelection();
@@ -4419,6 +4450,16 @@ el('pdf-workspace-editor').addEventListener('input', schedulePdfWorkspaceSave);
 el('pdf-workspace-editor').addEventListener('keyup', () => { rememberPdfWorkspaceRange(); updatePdfNoteCommandStates(); });
 el('pdf-workspace-editor').addEventListener('mouseup', () => { rememberPdfWorkspaceRange(); updatePdfNoteCommandStates(); });
 el('pdf-workspace-editor').addEventListener('keydown', event => {
+  if (event.key === 'Tab' && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    event.preventDefault();
+    const selection = window.getSelection();
+    const anchor = selection?.anchorNode?.nodeType === Node.TEXT_NODE ? selection.anchorNode.parentElement : selection?.anchorNode;
+    if (event.shiftKey) document.execCommand('outdent');
+    else if (anchor?.closest?.('li,blockquote')) document.execCommand('indent');
+    else document.execCommand('insertText', false, '\u00a0\u00a0\u00a0\u00a0');
+    rememberPdfWorkspaceRange(); updatePdfNoteCommandStates(); commitPdfNoteHistory(); schedulePdfWorkspaceSave({ recordHistory: false });
+    return;
+  }
   if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
   const key = event.key.toLowerCase();
   if (key === 'z') {
@@ -4502,7 +4543,7 @@ el('pdf-pages-container').addEventListener('pointerdown', event => {
   if (!pageNumber) return;
   event.preventDefault(); event.stopPropagation(); window.getSelection()?.removeAllRanges();
   discardPdfTextSelectionDraft(); clearPdfBrowseSelection();
-  if (browseMode) closeTranslationPopover();
+  if (browseMode) dismissIndependentTranslation();
   const layout = pdfVisualTextLayout(layer);
   if (!layout.runs.length) return toast('当前页没有可选择的文字，请尝试 OCR');
   stack.classList.add('visual-selecting');

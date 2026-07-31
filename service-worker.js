@@ -1,5 +1,5 @@
-const VERSION = '6.12.0';
-const CACHE = `paperscope-pages-v24-${VERSION}`;
+const VERSION = '6.12.1';
+const CACHE = `paperscope-pages-v25-${VERSION}`;
 const SHELL = [
   './',
   `./app.js?v=${VERSION}`,

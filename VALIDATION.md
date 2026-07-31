@@ -1,4 +1,4 @@
-# PaperScope v6.12 验证清单
+# PaperScope v6.12.1 验证清单
 
 ## 自动化门禁
 

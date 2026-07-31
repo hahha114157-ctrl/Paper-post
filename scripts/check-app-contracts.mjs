@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [app, html, storage, uiLogic, manifest, buildScript] = await Promise.all([
+const [app, html, storage, uiLogic, notePdf, manifest, buildScript] = await Promise.all([
   readFile(new URL('../app.js', import.meta.url), 'utf8'),
   readFile(new URL('../index.html', import.meta.url), 'utf8'),
   readFile(new URL('../pdf-storage.js', import.meta.url), 'utf8'),
   readFile(new URL('../ui-logic.js', import.meta.url), 'utf8'),
+  readFile(new URL('../note-pdf-export.js', import.meta.url), 'utf8'),
   readFile(new URL('../manifest.webmanifest', import.meta.url), 'utf8').then(JSON.parse),
   readFile(new URL('./build-static.mjs', import.meta.url), 'utf8')
 ]);
@@ -48,6 +49,8 @@ for (const id of [
   'note-export-metadata',
   'note-export-images',
   'translation-dock',
+  'top-translation-dock-host',
+  'pdf-translation-dock-host',
   'pdf-zoom-range',
   'install-app-state',
   'appearance-note-font'
@@ -66,6 +69,8 @@ assert.match(html, /\.paper-title:hover h3[\s\S]+text-decoration-color:currentCo
 assert.match(html, /\.paper-title h3[\s\S]+cursor:pointer/, 'paper title text must keep link cursor semantics');
 assert.match(html, /\.news-card:hover \.news-extra[\s\S]+visibility:visible/, 'news cards must reveal supplemental content without runtime fetching');
 assert.match(html, /\.news-extra\{position:absolute/, 'news details must overlay instead of shifting either column');
+assert.match(html, /\.news-extra\{[^}]*clip-path:inset\(0 0 100%/, 'news details must keep a sliding reveal without affecting sibling layout');
+assert.match(html, /html\{overflow-y:scroll;scrollbar-gutter:stable\}/, 'route changes must reserve scrollbar width and keep the library header stable');
 assert.match(html, /\.news-cluster-grid\{[^}]*align-items:start/, 'news grid must not stretch an inactive sibling when one card expands');
 assert.match(html, /\.news-column\{[^}]*align-content:start/, 'news columns must expand independently');
 assert.match(app, /原文预览图[\s\S]+中文速览/, 'expanded news must combine original imagery with a Chinese overview');
@@ -111,10 +116,14 @@ assert.match(app, /function sanitizePdfWorkspaceHtml\(/, 'rich notebook persiste
 assert.match(app, /function commitPdfNoteHistory\([\s\S]+pdfWorkspaceEditorHtml/, 'notebook must keep a custom history that includes inserted images');
 assert.match(app, /function undoPdfWorkspaceNote\([\s\S]+restorePdfNoteHistory/, 'notebook history must support undo');
 assert.match(app, /function updatePdfNoteCommandStates\([\s\S]+queryCommandState/, 'notebook format buttons must reflect the active selection');
+assert.match(app, /event\.key === 'Tab'[\s\S]+execCommand\('insertText'[\s\S]+commitPdfNoteHistory/, 'notebook Tab indentation must be undoable');
 assert.match(app, /buildNoteDocx\([\s\S]+application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document/, 'notebook export must generate a real Word document');
 assert.match(app, /buildNotePdf\([\s\S]+application\/pdf/, 'notebook export must generate a real PDF document');
+assert.match(notePdf, /const drawMetadataRow[\s\S]+textAlign = 'right'[\s\S]+fillText\(lines\[index\], valueX/, 'PDF metadata labels and values must use aligned columns');
 assert.match(app, /api\.mymemory\.translated\.net\/get/, 'online refine must have a working public fallback');
-assert.match(app, /SpeechSynthesisUtterance\(text\)[\s\S]+payload\.translation/, 'speech must read the translated result when available');
+assert.match(app, /const text = payload\?\.source[\s\S]+SpeechSynthesisUtterance\(text\)[\s\S]+utterance\.lang = 'en-US'/, 'speech must read the English source');
+assert.match(app, /function moveTranslationPopoverToDock\([\s\S]+host\.append\(popover\)/, 'translation integration must move into a real title-bar host');
+assert.match(app, /function dismissIndependentTranslation\([\s\S]+!translationSettings\.docked/, 'only independent translation windows should dismiss on unrelated clicks');
 assert.match(app, /modal\.id !== 'pdf-modal'/, 'clicking the reader backdrop must not close the PDF reader');
 assert.match(app, /function applyPdfPaneWidth\([\s\S]+PDF_PANE_WIDTH_KEY/, 'reader pane resizing must be bounded and persisted');
 assert.match(app, /function pdfSearchMatchesForPage\([\s\S]+while \(query[\s\S]+matches\.push/, 'PDF search must retain every exact normalized occurrence');

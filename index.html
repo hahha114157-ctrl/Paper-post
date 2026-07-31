@@ -27,10 +27,10 @@
     .translation-popover-head button:hover,.translation-popover-head button.active{background:var(--pale);color:var(--green)}
     .translation-popover-body{padding:13px 14px 15px;max-height:calc(min(620px,82vh) - 49px);overflow:auto}
     .translation-original{font:11px/1.55 ui-monospace,SFMono-Regular,monospace;color:var(--muted);word-break:break-word}
-    .translation-result{position:relative;margin:8px 0 12px;padding:14px 14px 13px;border:1px solid color-mix(in srgb,var(--green) 38%,var(--line));border-left:4px solid var(--green);border-radius:10px;background:color-mix(in srgb,var(--pale) 68%,var(--card));font-size:15px;font-weight:680;line-height:1.72;word-break:break-word}
+    .translation-result{position:relative;margin:8px 0 12px;padding:14px 14px 13px;border:1px solid color-mix(in srgb,var(--green) 38%,var(--line));border-left:4px solid var(--green);border-radius:10px;background:color-mix(in srgb,var(--pale) 68%,var(--card));font-size:15px;font-weight:520;line-height:1.72;word-break:break-word}
     .translation-result:before{content:"译文";display:block;margin-bottom:4px;color:var(--green);font:800 9px/1.2 ui-monospace,SFMono-Regular,monospace;letter-spacing:.08em}
-    .translation-popover.word-result .translation-result{font-size:22px;line-height:1.45;font-weight:820}
-    .translation-popover.paragraph-result .translation-result{font-size:14px;line-height:1.8;font-weight:560}
+    .translation-popover.word-result .translation-result{font-size:17px;line-height:1.55;font-weight:560}
+    .translation-popover.paragraph-result .translation-result{font-size:14.5px;line-height:1.8;font-weight:480}
     .translation-state{font-size:10px;color:var(--muted);margin:7px 0}
     .translation-section{margin:11px 0;padding-top:10px;border-top:1px solid var(--line)}
     .translation-section-title{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:7px;font-size:10px;color:var(--green);font-weight:780}
@@ -39,10 +39,24 @@
     .dictionary-entry strong{font-size:12px}.dictionary-entry small{color:var(--muted);margin-left:5px}
     .dictionary-senses{margin:5px 0 0;padding-left:19px}.dictionary-senses li{font-size:11px;margin:3px 0}
     .translation-alternatives{display:flex;gap:5px;flex-wrap:wrap}.translation-alternatives button{border:1px solid var(--line);background:var(--card);border-radius:7px;padding:5px 7px;font-size:10px}
-    .translation-popover.docked{right:10px!important;left:auto!important;top:92px!important;width:min(300px,calc(100vw - 20px));max-height:calc(100vh - 180px);resize:none;border-color:color-mix(in srgb,var(--green) 55%,var(--line))}
-    .translation-popover.docked .translation-popover-head strong:after{content:" · 已停靠";color:var(--muted);font-weight:600}
+    .translation-dock-host{display:flex;align-items:center;justify-content:flex-end;flex:1 1 auto;min-width:0;max-width:480px;margin-left:auto}
+    .translation-dock-host:empty{display:none}
+    .pdf-dialog>.dialog-head>div:first-child{flex:0 1 auto;min-width:170px}
+    .pdf-dialog>.dialog-head .translation-dock-host{max-width:min(540px,44vw);margin:0 12px 0 auto}
+    .translation-popover.docked{position:static!important;display:none;width:100%;max-width:460px;max-height:none;overflow:hidden;resize:none;border-color:color-mix(in srgb,var(--green) 38%,var(--line));border-radius:9px;background:var(--soft);box-shadow:none}
+    .translation-popover.docked.open{display:flex;align-items:center;animation:none}
+    .translation-popover.docked .translation-popover-head{flex:0 0 auto;padding:4px 5px 4px 8px;border:0;background:transparent;cursor:default}
+    .translation-popover.docked .translation-popover-head strong{font-size:9px;white-space:nowrap}
+    .translation-popover.docked .translation-popover-head strong:after{content:"";display:none}
+    .translation-popover.docked .translation-popover-controls{gap:1px}
+    .translation-popover.docked .translation-popover-head button{min-width:25px;width:25px;height:25px;font-size:13px}
+    .translation-popover.docked #translation-pin,.translation-popover.docked #translation-close{display:none}
+    .translation-popover.docked .translation-popover-body{display:flex;align-items:center;gap:5px;flex:1;min-width:0;max-height:none;overflow:hidden;padding:4px 6px 4px 0}
     .translation-popover.docked .translation-original,.translation-popover.docked .translation-state,.translation-popover.docked .translation-section{display:none!important}
-    .translation-popover.docked .translation-result{margin-top:0;max-height:220px;overflow:auto}
+    .translation-popover.docked .translation-result{flex:1;min-width:0;margin:0;padding:5px 8px;border:0;border-radius:7px;background:var(--card);font-size:13px!important;font-weight:500!important;line-height:1.4!important;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .translation-popover.docked .translation-result:before{display:none}
+    .translation-popover.docked .translation-actions{flex:0 0 auto;gap:3px}
+    .translation-popover.docked .translation-actions button{padding:5px 7px;font-size:9px;white-space:nowrap}
     .translation-popover.docked .translation-actions button:not(#translation-speak):not(#translation-copy){display:none}
     .bilingual-abstract{margin:10px 0 14px;padding:13px 14px;border-radius:10px;border:1px solid var(--line);background:var(--soft)}
     .bilingual-abstract strong{display:block;font-size:10px;color:var(--green);margin-bottom:6px}.bilingual-abstract p{font-size:11px;line-height:1.8;margin:0;white-space:pre-line}
@@ -417,10 +431,13 @@
     .pdf-search-mark{position:absolute;border-radius:2px;background:#ffd43b73;box-shadow:inset 0 0 0 1px #cf8b1870;mix-blend-mode:multiply;pointer-events:none}
     .pdf-search-mark.current{background:#ff9f1c99;box-shadow:0 0 0 2px #ff9f1c,inset 0 0 0 1px #a75000}
     .pdf-highlight-surface{position:absolute;inset:0;opacity:.25;mix-blend-mode:multiply;pointer-events:none}.pdf-highlight-surface .pdf-annotation-mark.highlight{mix-blend-mode:normal}
+    html{overflow-y:scroll;scrollbar-gutter:stable}
+    .route-name,.top-actions{flex:0 0 auto}
+    @keyframes appear{from{opacity:.3;transform:none}}
     .news-card{position:relative;will-change:auto;transform:none!important;overflow:visible}
-    .news-extra{position:absolute;left:0;top:calc(100% + 7px);z-index:22;width:min(560px,calc(100vw - 38px));opacity:0;visibility:hidden;transform:translateY(-5px);transition:opacity .16s ease,transform .18s ease,visibility .18s;pointer-events:none}
+    .news-extra{position:absolute;left:0;top:calc(100% + 7px);z-index:22;width:min(560px,calc(100vw - 38px));opacity:0;visibility:hidden;clip-path:inset(0 0 100% 0 round 12px);transition:clip-path .24s ease,opacity .16s ease,visibility .24s;pointer-events:none}
     .news-column:last-child .news-extra{left:auto;right:0}
-    .news-extra-inner{overflow:auto;max-height:min(68vh,650px);padding:15px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 18px 52px #0004}
+    .news-extra-inner{overflow:auto;max-height:min(68vh,650px);padding:15px;border:1px solid var(--line);border-radius:12px;background:var(--card);box-shadow:0 18px 52px #0004;transform:translateY(-8px);transition:transform .24s ease}
     .news-extra-content{display:grid;grid-template-columns:minmax(0,1fr);gap:13px}
     .news-extra-content.no-image{grid-template-columns:1fr}
     .news-extra figure{margin:0}.news-extra img{display:block;width:100%;height:auto;max-height:320px;border-radius:10px;object-fit:contain;background:var(--soft)}
@@ -428,7 +445,8 @@
     .news-extra-copy{display:grid;gap:10px}.news-extra-copy section{padding:10px 11px;border-radius:9px;background:var(--soft)}
     .news-extra strong{display:block;margin-bottom:4px;font-size:11px;color:var(--ink)}
     .news-extra span{display:block;color:var(--muted);font-size:10.5px;line-height:1.7}
-    .news-card:hover .news-extra,.news-card:focus-visible .news-extra,.news-card:focus-within .news-extra{opacity:1;visibility:visible;transform:none;pointer-events:auto}
+    .news-card:hover .news-extra,.news-card:focus-visible .news-extra,.news-card:focus-within .news-extra{opacity:1;visibility:visible;clip-path:inset(0 0 0 0 round 12px);pointer-events:auto}
+    .news-card:hover .news-extra-inner,.news-card:focus-visible .news-extra-inner,.news-card:focus-within .news-extra-inner{transform:none}
     .news-card-footer{margin-top:12px}
 
     @media(min-width:721px){
@@ -451,7 +469,7 @@
       .main{padding:0 15px 38px}.topbar{height:62px}.page-head{margin-top:21px}h1{font-size:27px}
       .news-filterbar{display:grid;grid-template-columns:1fr 1fr}.news-filterbar label:last-child{grid-column:1/-1}.news-filterbar select{width:100%}
       .news-cluster-head{align-items:flex-start}.news-cluster-head h2{font-size:16px}.news-card{padding:16px}.news-card:hover{transform:none}
-      .pdf-dialog{height:100%;padding:8px}.pdf-dialog>.dialog-head h2{max-width:58vw}
+      .pdf-dialog{height:100%;padding:8px}.pdf-dialog>.dialog-head h2{max-width:58vw}.translation-dock-host{display:none}
       .pdf-reader{height:auto;min-height:0;grid-template-columns:1fr}.pdf-text-pane{position:absolute;z-index:9;top:8px;bottom:8px;left:8px;right:auto;width:min(278px,calc(100% - 16px));min-width:0;max-height:none;border:1px solid var(--line);border-radius:10px;box-shadow:12px 0 38px #0004}.pdf-pane-resizer{display:none}
       .pdf-canvas-stage{min-height:0;padding:12px}
       .pdf-snapshot-card{width:calc(100vw - 24px);max-width:calc(100vw - 24px);max-height:68vh;resize:none}
@@ -499,6 +517,7 @@
   <main class="main">
     <header class="topbar">
       <div class="route-name"><strong id="route-title">概览</strong> / PAPER INTELLIGENCE</div>
+      <div class="translation-dock-host" id="top-translation-dock-host" aria-label="标题栏翻译"></div>
       <div class="top-actions">
         <label class="search">⌕ <input id="global-search" placeholder="搜索当前页面"></label>
         <button class="icon-button" id="command-open" title="快速跳转 Ctrl/⌘ + K" aria-label="快速跳转">⌘</button>
@@ -589,7 +608,7 @@
         <section class="card settings-card"><h2>PDF 导入中心</h2><p>批量拖放 PDF、扫描文件夹、检查重复项和恢复失败任务。</p><div class="settings-status"><div><span>导入队列</span><strong id="settings-import-summary">0 个任务</strong></div></div><div class="settings-actions"><button class="primary" id="settings-import-pdf">打开导入中心</button><button class="ghost" id="import-pdf-directory">扫描文件夹</button></div></section>
         <section class="card settings-card"><h2>备份与迁移</h2><p>完整备份包含文献索引、PDF 和标注；JSON 用于轻量迁移，不含 PDF 二进制。</p><div class="settings-actions"><button class="primary" id="export-full-backup">完整备份</button><button class="ghost" id="export-library">导出 JSON</button><button class="ghost" id="import-library">导入 JSON</button><button class="ghost" id="export-vocabulary">导出生词</button></div></section>
         <section class="card settings-card"><h2>存储与维护</h2><p>核对 IndexedDB 附件、修复断链，或清理回收站中的文献和 PDF。</p><div class="settings-status"><div><span>本地存储</span><strong id="settings-storage-summary">正在估算</strong></div><div><span>回收站</span><strong id="settings-trash-summary">0 篇</strong></div></div><div class="settings-actions"><button class="ghost" id="repair-pdf-library">附件检查</button><button class="ghost danger" id="empty-trash">清空回收站</button></div></section>
-        <section class="card settings-card" id="settings-help"><h2>个人资料、快捷键与版本</h2><p>PaperScope v6.12 · 数据默认只保存在当前浏览器。</p><div class="settings-status"><div><span>快速跳转</span><strong>Ctrl/⌘ + K</strong></div><div><span>关闭菜单或弹窗</span><strong>Esc</strong></div><div><span>PDF 标注 / 框选截图</span><strong>H / U / N / R / S</strong></div></div><div class="settings-actions"><button class="primary" id="settings-profile">编辑个人资料</button></div></section>
+        <section class="card settings-card" id="settings-help"><h2>个人资料、快捷键与版本</h2><p>PaperScope v6.12.1 · 数据默认只保存在当前浏览器。</p><div class="settings-status"><div><span>快速跳转</span><strong>Ctrl/⌘ + K</strong></div><div><span>关闭菜单或弹窗</span><strong>Esc</strong></div><div><span>PDF 标注 / 框选截图</span><strong>H / U / N / R / S</strong></div></div><div class="settings-actions"><button class="primary" id="settings-profile">编辑个人资料</button></div></section>
       </div>
       <input class="hidden" type="file" id="import-file" accept="application/json"><input class="hidden" type="file" id="local-pdf-file" accept="application/pdf,.pdf" multiple><input class="hidden" type="file" id="local-pdf-directory" accept="application/pdf,.pdf" multiple webkitdirectory>
     </section>
@@ -617,7 +636,7 @@
 <div class="modal" id="command-modal"><div class="dialog command-dialog"><input id="command-input" placeholder="跳转页面或搜索论文…"><div class="command-list" id="command-list"></div></div></div>
 <div class="modal" id="profile-modal"><div class="dialog" style="width:min(520px,95vw)"><div class="dialog-head"><h2>编辑个人资料</h2><button class="icon-button" data-close-modal="profile-modal">×</button></div><div class="editor"><input id="profile-name" maxlength="30" placeholder="显示名称"><input id="profile-focus" maxlength="80" placeholder="研究方向"><textarea id="profile-bio" maxlength="180" placeholder="个人简介"></textarea><button class="primary" id="save-profile">保存资料</button></div></div></div>
 <div class="modal" id="pdf-modal"><div class="dialog pdf-dialog" aria-labelledby="pdf-title">
-  <div class="dialog-head"><div><h2 id="pdf-title" data-translatable>站内 PDF 阅读与标注</h2><span class="pdf-status" id="pdf-meta"></span></div><div class="pdf-dialog-actions"><button class="small" id="pdf-inspector-toggle" aria-expanded="false" aria-controls="pdf-text-pane">工具栏 <span class="pdf-count" id="pdf-inspector-count">0</span></button><button class="icon-button" data-close-modal="pdf-modal">×</button></div></div>
+  <div class="dialog-head"><div><h2 id="pdf-title" data-translatable>站内 PDF 阅读与标注</h2><span class="pdf-status" id="pdf-meta"></span></div><div class="translation-dock-host" id="pdf-translation-dock-host" aria-label="论文标题栏翻译"></div><div class="pdf-dialog-actions"><button class="small" id="pdf-inspector-toggle" aria-expanded="false" aria-controls="pdf-text-pane">工具栏 <span class="pdf-count" id="pdf-inspector-count">0</span></button><button class="icon-button" data-close-modal="pdf-modal">×</button></div></div>
   <div class="pdf-reader inspector-hidden" id="pdf-reader">
     <aside class="pdf-text-pane hidden" id="pdf-text-pane">
       <div class="pdf-pane-head"><div class="pdf-pane-tabs" role="tablist" aria-label="阅读工作区"><button class="active" role="tab" data-pdf-pane-tab="annotations" aria-selected="true">阅读</button><button role="tab" data-pdf-pane-tab="notes" aria-selected="false">笔记</button></div><button class="icon-button" id="pdf-inspector-close" aria-label="收起阅读工具">×</button></div>
@@ -680,19 +699,19 @@
   <p class="mono">离线结果不会上传。只有点击“在线精译”或选择“优先在线”时，选中文字才会发送到公共服务或你配置的代理。</p>
 </div></div></div>
 <aside class="translation-popover" id="translation-popover" role="dialog" aria-live="polite" aria-label="英译中">
-  <div class="translation-popover-head" id="translation-drag-handle"><strong>EN → 中文</strong><div class="translation-popover-controls"><button id="translation-dock" aria-label="停靠翻译框到右侧" aria-pressed="false" title="停靠到右侧边栏">▥</button><button id="translation-pin" aria-label="固定翻译框位置" aria-pressed="false" title="固定位置">⌖</button><button id="translation-close" aria-label="关闭翻译">×</button></div></div>
+  <div class="translation-popover-head" id="translation-drag-handle"><strong>EN → 中文</strong><div class="translation-popover-controls"><button id="translation-dock" aria-label="将翻译框整合到标题栏" aria-pressed="false" title="整合到标题栏">▥</button><button id="translation-pin" aria-label="固定翻译框位置" aria-pressed="false" title="固定位置">⌖</button><button id="translation-close" aria-label="关闭翻译">×</button></div></div>
   <div class="translation-popover-body">
     <div class="translation-original" id="translation-original"></div>
     <div class="translation-state" id="translation-state"></div>
     <div class="translation-result" id="translation-result"></div>
     <section class="translation-section hidden" id="translation-dictionary-section"><div class="translation-section-title"><span>词典释义</span><span class="translation-source" id="translation-dictionary-source"></span></div><div id="translation-dictionary"></div></section>
     <section class="translation-section hidden" id="translation-alternatives-section"><div class="translation-section-title"><span>其他译法</span><span class="translation-source" id="translation-provider"></span></div><div class="translation-alternatives" id="translation-alternatives"></div></section>
-    <div class="translation-actions"><button class="primary hidden" id="translation-prepare-inline">准备本地翻译</button><button class="primary" id="translation-online">在线精译</button><button class="small" id="translation-speak">朗读</button><button class="small" id="translation-copy">复制译文</button><button class="small" id="translation-vocabulary">加入生词本</button><button class="small" id="translation-note">加入论文笔记</button></div>
+    <div class="translation-actions"><button class="primary hidden" id="translation-prepare-inline">准备本地翻译</button><button class="primary" id="translation-online">在线精译</button><button class="small" id="translation-speak">朗读英文</button><button class="small" id="translation-copy">复制译文</button><button class="small" id="translation-vocabulary">加入生词本</button><button class="small" id="translation-note">加入论文笔记</button></div>
   </div>
 </aside>
 <div class="pdf-snapshot-layer" id="pdf-snapshot-layer" aria-live="polite" aria-label="PDF 截图对照区"></div>
 <aside class="update-banner" id="update-banner" role="status" aria-live="polite"><div><strong>PaperScope 新版本已准备好</strong><span>刷新即可切换到完整新版，不会清除收藏、笔记或生词本。</span></div><div class="update-actions"><button class="primary" id="update-now">立即刷新</button><button class="ghost" id="update-later">稍后</button></div></aside>
 <button class="backtop" id="backtop" title="返回顶部">↑</button><div class="toast" id="toast"></div>
-<script type="module" src="./app.js?v=6.12.0"></script>
+<script type="module" src="./app.js?v=6.12.1"></script>
 </body>
 </html>

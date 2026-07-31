@@ -99,13 +99,37 @@ export async function buildNotePdf({
     }
     y += style.after ?? baseSize * .55;
   };
+  const drawMetadataRow = (label, value, style = {}) => {
+    const size = style.size || baseSize * .9;
+    const lineHeight = size * (style.lineHeight || 1.5);
+    const labelWidth = 72 * scale;
+    const gap = 12 * scale;
+    const valueX = margin + labelWidth + gap;
+    context.font = `400 ${size}px "${fontFamily}", sans-serif`;
+    const lines = splitLines(context, String(value || ''), canvas.width - margin - valueX);
+    ensureRoom(Math.min(Math.max(1, lines.length), 2) * lineHeight + (style.after ?? baseSize * .25));
+    for (let index = 0; index < lines.length; index += 1) {
+      ensureRoom(lineHeight);
+      if (index === 0) {
+        context.fillStyle = style.labelColor || '#6d7b73';
+        context.textAlign = 'right';
+        context.fillText(`${label}：`, margin + labelWidth, y);
+      }
+      context.fillStyle = style.color || '#46534c';
+      context.textAlign = 'left';
+      context.fillText(lines[index], valueX, y);
+      y += lineHeight;
+    }
+    y += style.after ?? baseSize * .25;
+    context.textAlign = 'left';
+  };
 
   startPage();
   drawText(`${title} · 阅读笔记`, { size: baseSize * 1.7, bold: true, color: '#116347', lineHeight: 1.35, after: baseSize * 1.2 });
   if (includeMetadata) {
-    for (const item of metadata.filter(item => item?.value)) drawText(`${item.label}：${item.value}`, { size: baseSize * .9, color: '#46534c', lineHeight: 1.5, after: baseSize * .25 });
+    for (const item of metadata.filter(item => item?.value)) drawMetadataRow(item.label, item.value);
   }
-  drawText(`导出时间：${exportedAt}`, { size: baseSize * .82, color: '#6d7b73', lineHeight: 1.45, after: baseSize });
+  drawMetadataRow('导出时间', exportedAt, { size: baseSize * .82, color: '#6d7b73', lineHeight: 1.45, after: baseSize });
   context.fillStyle = '#dde5df'; context.fillRect(margin, y, canvas.width - margin * 2, 2); y += baseSize * 1.2;
 
   if (!blocks.length) drawText('暂无阅读笔记', { italic: true, color: '#6d7b73' });
