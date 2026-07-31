@@ -52,3 +52,22 @@ test('Word export is a readable OOXML package with metadata, formatting and imag
   assert.match(document, /<w:i\/>/);
   assert.match(document, /r:embed="rId10"/);
 });
+
+test('Word export applies one configured font and can omit source metadata and images', () => {
+  const bytes = buildNoteDocx({
+    title: '统一字体',
+    metadata: [{ label: '作者', value: '不应出现' }],
+    blocks: [{ type: 'paragraph', runs: [{ text: '统一正文' }] }, { type: 'image', imageIndex: 0 }],
+    images: [{ bytes: Uint8Array.of(1, 2, 3), width: 10, height: 10 }],
+    options: { fontFamily: 'SimSun', fontSize: 14, includeMetadata: false, includeImages: false, pageSize: 'letter', margin: 'wide' }
+  });
+  const entries = zipEntries(bytes);
+  const document = new TextDecoder().decode(entries.get('word/document.xml'));
+  const styles = new TextDecoder().decode(entries.get('word/styles.xml'));
+  assert.doesNotMatch(document, /不应出现/);
+  assert.doesNotMatch(document, /r:embed=/);
+  assert.equal([...entries.keys()].some(name => name.startsWith('word/media/')), false);
+  assert.match(styles, /w:ascii="SimSun" w:eastAsia="SimSun" w:hAnsi="SimSun"/);
+  assert.match(styles, /w:sz w:val="28"/);
+  assert.match(document, /w:pgSz w:w="12240" w:h="15840"/);
+});

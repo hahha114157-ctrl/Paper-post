@@ -41,6 +41,13 @@ for (const id of [
   'pdf-note-undo',
   'pdf-note-redo',
   'pdf-note-export',
+  'note-export-modal',
+  'note-export-format',
+  'note-export-font',
+  'note-export-font-size',
+  'note-export-metadata',
+  'note-export-images',
+  'translation-dock',
   'pdf-zoom-range',
   'install-app-state',
   'appearance-note-font'
@@ -57,12 +64,18 @@ assert.doesNotMatch(moreMenu, /data-route="settings"|翻译历史|快捷键与�
 assert.match(html, /id="library-batchbar"[^>]*class="batchbar hidden"|class="batchbar hidden"[^>]*id="library-batchbar"/, 'batch toolbar must be hidden until selection');
 assert.match(html, /\.paper-title:hover h3[\s\S]+text-decoration-color:currentColor/, 'paper titles must expose hover feedback');
 assert.match(html, /\.paper-title h3[\s\S]+cursor:pointer/, 'paper title text must keep link cursor semantics');
-assert.match(html, /\.news-card:hover \.news-extra[\s\S]+grid-template-rows:1fr/, 'news cards must expand supplemental content without runtime fetching');
+assert.match(html, /\.news-card:hover \.news-extra[\s\S]+visibility:visible/, 'news cards must reveal supplemental content without runtime fetching');
+assert.match(html, /\.news-extra\{position:absolute/, 'news details must overlay instead of shifting either column');
 assert.match(html, /\.news-cluster-grid\{[^}]*align-items:start/, 'news grid must not stretch an inactive sibling when one card expands');
 assert.match(html, /\.news-column\{[^}]*align-content:start/, 'news columns must expand independently');
 assert.match(app, /原文预览图[\s\S]+中文速览/, 'expanded news must combine original imagery with a Chinese overview');
 assert.ok(html.indexOf('id="detail-link"') < html.indexOf('<div class="drawer-actions">'), 'original paper link must stay above secondary drawer actions');
 assert.match(html, /\.library-row\.selected[\s\S]+box-shadow:inset 4px 0 var\(--green\)/, 'selected library rows need a persistent visual state');
+assert.match(html, /\.batchbar\{position:fixed!important/, 'batch actions must float without shifting library rows');
+assert.match(html, /library-membership-popover/, 'library titles must reveal membership details on hover');
+const libraryView = html.slice(html.indexOf('id="view-library"'), html.indexOf('id="view-news"'));
+assert.doesNotMatch(libraryView, /<option value="published">|<option value="smart">|data-tab="published"|data-tab="smart"/, 'unclear published and smart tabs must be removed');
+assert.doesNotMatch(html, /id="translation-context-section"|id="translation-context"/, 'translation popover must not expose redundant context');
 assert.doesNotMatch(html.slice(html.lastIndexOf('<style>')), /\.page-head \.page-actions\s*\{\s*display:none/, 'final responsive overrides must keep page actions visible');
 assert.doesNotMatch(html, /id="pdf-page-text"|data-pdf-pane-tab="text"/, 'redundant PDF page-text panel must be removed');
 assert.ok(html.indexOf('<summary>更多工具</summary>') < html.indexOf('id="pdf-ocr-page"'), 'OCR must live inside the secondary tools menu');
@@ -99,6 +112,9 @@ assert.match(app, /function commitPdfNoteHistory\([\s\S]+pdfWorkspaceEditorHtml/
 assert.match(app, /function undoPdfWorkspaceNote\([\s\S]+restorePdfNoteHistory/, 'notebook history must support undo');
 assert.match(app, /function updatePdfNoteCommandStates\([\s\S]+queryCommandState/, 'notebook format buttons must reflect the active selection');
 assert.match(app, /buildNoteDocx\([\s\S]+application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document/, 'notebook export must generate a real Word document');
+assert.match(app, /buildNotePdf\([\s\S]+application\/pdf/, 'notebook export must generate a real PDF document');
+assert.match(app, /api\.mymemory\.translated\.net\/get/, 'online refine must have a working public fallback');
+assert.match(app, /SpeechSynthesisUtterance\(text\)[\s\S]+payload\.translation/, 'speech must read the translated result when available');
 assert.match(app, /modal\.id !== 'pdf-modal'/, 'clicking the reader backdrop must not close the PDF reader');
 assert.match(app, /function applyPdfPaneWidth\([\s\S]+PDF_PANE_WIDTH_KEY/, 'reader pane resizing must be bounded and persisted');
 assert.match(app, /function pdfSearchMatchesForPage\([\s\S]+while \(query[\s\S]+matches\.push/, 'PDF search must retain every exact normalized occurrence');
