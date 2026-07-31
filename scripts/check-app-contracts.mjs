@@ -38,6 +38,8 @@ for (const id of [
   'pdf-note-add-image',
   'pdf-note-add-snapshot',
   'pdf-note-font-size',
+  'pdf-note-undo',
+  'pdf-note-redo',
   'pdf-note-export',
   'pdf-zoom-range',
   'install-app-state',
@@ -57,6 +59,8 @@ assert.match(html, /\.paper-title:hover h3[\s\S]+text-decoration-color:currentCo
 assert.match(html, /\.paper-title h3[\s\S]+cursor:pointer/, 'paper title text must keep link cursor semantics');
 assert.match(html, /\.news-card:hover \.news-extra[\s\S]+grid-template-rows:1fr/, 'news cards must expand supplemental content without runtime fetching');
 assert.match(html, /\.news-cluster-grid\{[^}]*align-items:start/, 'news grid must not stretch an inactive sibling when one card expands');
+assert.match(html, /\.news-column\{[^}]*align-content:start/, 'news columns must expand independently');
+assert.match(app, /原文预览图[\s\S]+中文速览/, 'expanded news must combine original imagery with a Chinese overview');
 assert.ok(html.indexOf('id="detail-link"') < html.indexOf('<div class="drawer-actions">'), 'original paper link must stay above secondary drawer actions');
 assert.match(html, /\.library-row\.selected[\s\S]+box-shadow:inset 4px 0 var\(--green\)/, 'selected library rows need a persistent visual state');
 assert.doesNotMatch(html.slice(html.lastIndexOf('<style>')), /\.page-head \.page-actions\s*\{\s*display:none/, 'final responsive overrides must keep page actions visible');
@@ -91,6 +95,11 @@ assert.match(app, /PDF 标注已删除[\s\S]+actionLabel: '撤销'/, 'PDF annota
 assert.doesNotMatch(app, /action === 'delete' && confirm\('删除这条 PDF 标注/, 'PDF annotation deletion must not use a browser confirmation dialog');
 assert.match(app, /pdf-highlight-surface/, 'PDF highlights must share one compositing surface so overlaps do not darken repeatedly');
 assert.match(app, /function sanitizePdfWorkspaceHtml\(/, 'rich notebook persistence must sanitize stored HTML');
+assert.match(app, /function commitPdfNoteHistory\([\s\S]+pdfWorkspaceEditorHtml/, 'notebook must keep a custom history that includes inserted images');
+assert.match(app, /function undoPdfWorkspaceNote\([\s\S]+restorePdfNoteHistory/, 'notebook history must support undo');
+assert.match(app, /function updatePdfNoteCommandStates\([\s\S]+queryCommandState/, 'notebook format buttons must reflect the active selection');
+assert.match(app, /buildNoteDocx\([\s\S]+application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document/, 'notebook export must generate a real Word document');
+assert.match(app, /modal\.id !== 'pdf-modal'/, 'clicking the reader backdrop must not close the PDF reader');
 assert.match(app, /function applyPdfPaneWidth\([\s\S]+PDF_PANE_WIDTH_KEY/, 'reader pane resizing must be bounded and persisted');
 assert.match(app, /function pdfSearchMatchesForPage\([\s\S]+while \(query[\s\S]+matches\.push/, 'PDF search must retain every exact normalized occurrence');
 assert.match(app, /function renderPdfSearchHighlightsForStack\([\s\S]+pdf-search-mark/, 'PDF search matches must be highlighted on the rendered page');
