@@ -85,6 +85,25 @@ export function validateCollectionTree(collections = {}) {
   return normalized;
 }
 
+export function collectionIdsWithAncestors(collections = {}, collectionIds = []) {
+  const result = new Set();
+  for (const collectionId of collectionIds || []) {
+    let cursor = collections[collectionId] ? collectionId : null;
+    const path = new Set();
+    while (cursor && !path.has(cursor)) {
+      path.add(cursor);
+      result.add(cursor);
+      cursor = collections[cursor]?.parentId || null;
+    }
+  }
+  return [...result];
+}
+
+export function recordBelongsToCollection(record, collections = {}, collectionId) {
+  if (!collectionId || !collections?.[collectionId]) return false;
+  return collectionIdsWithAncestors(collections, record?.collections || []).includes(collectionId);
+}
+
 function migratedRecord(record = {}) {
   return {
     ...record,

@@ -53,7 +53,11 @@ for (const id of [
   'pdf-translation-dock-host',
   'pdf-zoom-range',
   'install-app-state',
-  'appearance-note-font'
+  'appearance-note-font',
+  'library-refresh',
+  'library-view-search',
+  'library-view-title',
+  'library-view-count'
 ]) assert.match(html, new RegExp(`id="${id}"`), `${id} must exist`);
 
 assert.match(html, /id="local-pdf-file"[^>]*multiple/, 'PDF picker must support multiple files');
@@ -71,6 +75,9 @@ assert.match(html, /\.news-card:hover \.news-extra[\s\S]+visibility:visible/, 'n
 assert.match(html, /\.news-extra\{display:grid;grid-template-rows:0fr/, 'news details must slide open inside the hovered card');
 assert.match(html, /\.news-card:hover \.news-extra[\s\S]+grid-template-rows:1fr/, 'news hover must expand details with the original sliding interaction');
 assert.match(html, /html\{overflow-y:scroll;scrollbar-gutter:stable\}/, 'route changes must reserve scrollbar width and keep the library header stable');
+assert.match(html, /\.library-view-head\{[^}]*min-height:96px/, 'library subviews must share one fixed header geometry');
+assert.match(html, /\.library-page-head\{[^}]*min-height:118px/, 'library page actions and title must keep a stable vertical anchor');
+assert.match(html, /\.collection-node\{[^}]*border-left:4px solid var\(--collection-color\)/, 'collection hierarchy must use readable color-coded cards');
 assert.match(html, /\.news-cluster-grid\{[^}]*align-items:start/, 'news grid must not stretch an inactive sibling when one card expands');
 assert.match(html, /\.news-column\{[^}]*align-content:start/, 'news columns must expand independently');
 assert.match(app, /原文预览图[\s\S]+中文速览/, 'expanded news must combine original imagery with a Chinese overview');
@@ -104,6 +111,10 @@ assert.match(app, /sourceDocuments[\s\S]+movePdfAttachment\(sourceId, targetId, 
 assert.match(app, /const STORAGE_KEY = 'paperscope-library-v4'/, 'library schema v4 must be active');
 assert.match(app, /function moveRecordsToTrash\(/, 'soft delete with undo must exist');
 assert.match(app, /function permanentlyDeleteRecords\(/, 'permanent delete workflow must exist');
+assert.match(app, /recordBelongsToCollection\(record, library\.collections, collectionId\)/, 'parent collection filters must include descendant papers');
+assert.match(app, /function renderCollectionTree\([\s\S]+直接 \$\{directCount\} 篇[\s\S]+汇总 \$\{papers\.length\} 篇/, 'collection view must show direct and inherited paper counts');
+assert.match(app, /function recordHasAvailablePdf\(record\)[\s\S]+!record\.pdfAttachment\.missing/, 'missing PDF metadata must not expose a reading action');
+assert.match(app, /function refreshLibraryFromStorage\([\s\S]+repairPdfLibrary\(\{ notify: false \}\)[\s\S]+renderRoute\(\)/, 'library refresh must revalidate local attachments and rerender the current view');
 assert.match(app, /groupNewsItems\(filtered, groupMode\)/, 'news must be ordered into meaningful groups');
 assert.match(app, /function renderPdfWorkspaceNote\(/, 'PDF reader must expose a persistent notebook');
 assert.match(app, /function insertPdfWorkspaceFigure\([\s\S]+range\.startContainer[\s\S]+block\.after\(figure, paragraph\)/, 'notebook images must be inserted at the active document position');

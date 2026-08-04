@@ -17,6 +17,7 @@ import {
 } from './pdf-storage.js';
 import {
   applyBatchAction,
+  collectionIdsWithAncestors,
   derivePdfMetadata,
   findPdfPaperMatch,
   isActiveRecord,
@@ -26,6 +27,7 @@ import {
   migrateLibraryData,
   pdfFileFingerprint,
   recordHasNotes,
+  recordBelongsToCollection,
   setRecordRead,
   validateCollectionTree
 } from './library-logic.js';
@@ -41,7 +43,7 @@ import {
 import { buildNoteDocx } from './note-export.js';
 import { buildNotePdf } from './note-pdf-export.js';
 
-const APP_VERSION = '6.12.2';
+const APP_VERSION = '6.13.0';
 const STORAGE_KEY = 'paperscope-library-v4';
 const V3_STORAGE_KEY = 'paperscope-library-v3';
 const V2_STORAGE_KEY = 'paperscope-library-v2';
@@ -464,6 +466,28 @@ function duplicateRecordIds() {
   }
   return new Set([...groups.values()].filter(ids => ids.length > 1).flat());
 }
+const LIBRARY_VIEW_META = {
+  all: ['ALL PAPERS', '全部文献', '统一查看当前文献库中的有效记录。'],
+  unfiled: ['TO ORGANIZE', '待整理', '尚未加入任何分类的文献，适合集中归档。'],
+  queue: ['READING QUEUE', '阅读队列', '已经安排、准备继续阅读的文献。'],
+  saved: ['SAVED PAPERS', '收藏', '已明确收藏、需要长期保留的文献。'],
+  collections: ['COLLECTION MAP', '分类管理', '按父子层级查看分类；父分类自动汇总所有子分类文章。'],
+  notes: ['NOTES & ANNOTATIONS', '笔记与标注', '集中查看已有笔记、高亮或 PDF 批注的文献。'],
+  recent: ['RECENTLY OPENED', '最近看过', '按最后打开时间回到近期阅读内容。'],
+  duplicates: ['DUPLICATE REVIEW', '重复项', '检查 DOI 或标题相同、可能需要合并的记录。'],
+  archive: ['ARCHIVE', '归档', '保留已完成或暂时不活跃的文献。'],
+  trash: ['TRASH', '回收站', '查看可恢复或需要永久删除的文献。'],
+  vocabulary: ['VOCABULARY', '生词本', '复习阅读过程中保存的英文词汇与释义。']
+};
+function recordHasAvailablePdf(record) { return Boolean(record?.pdfAttachment && !record.pdfAttachment.missing); }
+function syncLibraryViewHeader(tab, q, count) {
+  const [kicker, title, description] = LIBRARY_VIEW_META[tab] || LIBRARY_VIEW_META.all;
+  el('library-view-kicker').textContent = kicker;
+  el('library-view-title').textContent = title;
+  el('library-view-description').textContent = description;
+  el('library-view-search').value = q || '';
+  el('library-view-count').textContent = `${count} ${tab === 'vocabulary' ? '条' : '篇'}`;
+}
 function libraryRecords(tab, collectionId, q, smart = 'unread') {
   if (tab === 'recent') {
     const recent = new Map();
@@ -488,11 +512,11 @@ function libraryRecords(tab, collectionId, q, smart = 'unread') {
     if (tab === 'queue') return Boolean(record.queueAt);
     if (tab === 'notes') return recordHasNotes(record);
     if (tab === 'published') return Boolean(record.savedAt && publicationInfo(record, record.paper).status === 'published');
-    if (tab === 'collections') return collectionId && collectionId !== 'all' ? record.collections?.includes(collectionId) : Boolean(record.collections?.length);
-    if (tab === 'unfiled') return Boolean((record.savedAt || record.pdfAttachment) && !record.collections?.length);
+    if (tab === 'collections') return collectionId && collectionId !== 'all' ? recordBelongsToCollection(record, library.collections, collectionId) : Boolean(record.collections?.length);
+    if (tab === 'unfiled') return Boolean((record.savedAt || recordHasAvailablePdf(record)) && !record.collections?.length);
     if (tab === 'duplicates') return duplicates.has(id);
     if (tab === 'smart') {
-      if (smart === 'has-pdf') return Boolean(record.pdfAttachment);
+      if (smart === 'has-pdf') return recordHasAvailablePdf(record);
       if (smart === 'annotated') return Boolean(record.pdfAttachment?.annotationCount || record.highlights?.length);
       if (smart === 'recent-add') return Date.now() - new Date(record.savedAt || record.pdfAttachment?.importedAt || 0).getTime() <= 7 * 86400_000;
       if (smart === 'needs-metadata') return !paper.title || !(paper.authors || []).length || (!paper.doi && !paper.arxivId);
@@ -518,7 +542,15 @@ function renderLibraryPage(route) {
     state.batch.clear(); state.visibleLibraryIds = []; updateBatchCount();
     return renderVocabularyPage(route);
   }
-  const records = libraryRecords(tab, collectionId, q, smart); const total = Math.max(1, Math.ceil(records.length / 10)); const safePage = Math.min(page, total); const pageRecords = records.slice((safePage - 1) * 10, safePage * 10);
+  const records = libraryRecords(tab, collectionId, q, smart);
+  syncLibraryViewHeader(tab, q, records.length);
+  if (tab === 'collections') {
+    state.batch.clear(); state.visibleLibraryIds = []; updateBatchCount();
+    renderCollectionTree(collectionId, q);
+    el('library-pagination').innerHTML = '';
+    return;
+  }
+  const total = Math.max(1, Math.ceil(records.length / 10)); const safePage = Math.min(page, total); const pageRecords = records.slice((safePage - 1) * 10, safePage * 10);
   const batchContext = `library/${tab}`;
   if (state.batchContext !== batchContext) {
     state.batch.clear();
@@ -530,18 +562,61 @@ function renderLibraryPage(route) {
   updateBatchCount();
   renderPagination('library-pagination', safePage, total, next => navigate(`library/${tab}`, { ...route.query, page: next }));
 }
+function orderedCollectionEntries() {
+  library.collections = validateCollectionTree(library.collections);
+  const entries = Object.entries(library.collections);
+  const children = new Map();
+  for (const entry of entries) {
+    const parent = entry[1].parentId && library.collections[entry[1].parentId] ? entry[1].parentId : '';
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(entry);
+  }
+  for (const values of children.values()) values.sort((a, b) => Number(a[1].order || 0) - Number(b[1].order || 0) || a[1].name.localeCompare(b[1].name, 'zh-CN'));
+  const ordered = []; const visited = new Set();
+  const visit = (parentId, depth) => {
+    for (const [id, collection] of children.get(parentId) || []) {
+      if (visited.has(id)) continue;
+      visited.add(id); ordered.push([id, collection, depth]); visit(id, depth + 1);
+    }
+  };
+  visit('', 0);
+  for (const [id, collection] of entries) if (!visited.has(id)) ordered.push([id, collection, 0]);
+  return ordered;
+}
+function renderCollectionTree(selected = 'all', q = '') {
+  const allEntries = orderedCollectionEntries();
+  const entries = selected && selected !== 'all'
+    ? allEntries.filter(([id]) => collectionIdsWithAncestors(library.collections, [id]).includes(selected))
+    : allEntries;
+  if (!entries.length) {
+    el('library-list').innerHTML = '<div class="empty">还没有分类。可在上方创建顶层分类或子分类。</div>';
+    return;
+  }
+  el('library-list').innerHTML = `<div class="collection-tree">${entries.map(([id, collection, depth]) => {
+    const papers = libraryRecords('collections', id, q);
+    const directCount = Object.values(library.records).filter(record => isActiveRecord(record) && record.collections?.includes(id)).length;
+    const childCount = Object.values(library.collections).filter(item => item.parentId === id).length;
+    const paperRows = papers.length ? papers.map(([paperId, record]) => {
+      const paper = getPaper(paperId) || record.paper;
+      const authors = (paper.authors || []).slice(0, 3).join('、') || '作者待补充';
+      return `<article class="collection-paper-card" data-library-id="${escapeHtml(paperId)}"><div><button class="collection-paper-title" data-library-action="open">${escapeHtml(paper.title)}</button><div class="collection-paper-meta">${escapeHtml(authors)}${paper.venue ? ` · ${escapeHtml(paper.venue)}` : ''}</div></div><div class="collection-paper-actions">${recordHasAvailablePdf(record) ? '<button class="small" data-library-action="pdf">阅读 PDF</button>' : ''}<button class="small" data-library-action="open">查看</button></div></article>`;
+    }).join('') : '<div class="collection-empty">这个分类及其子分类中暂无匹配文章。</div>';
+    return `<section class="collection-node" data-depth="${Math.min(depth, 3)}" style="--collection-color:${escapeHtml(collection.color || '#116347')}"><header class="collection-node-head"><div class="collection-node-title"><span class="collection-node-icon">□</span><div><h3>${escapeHtml(collection.name)}</h3><p>${escapeHtml(collection.description || (childCount ? '父分类会自动包含下级分类中的文章。' : '当前为末级分类。'))}</p></div></div><div class="collection-node-meta"><span>直接 ${directCount} 篇</span><span>汇总 ${papers.length} 篇</span>${childCount ? `<span>${childCount} 个子分类</span>` : ''}</div></header><div class="collection-paper-list">${paperRows}</div></section>`;
+  }).join('')}</div>`;
+}
 function libraryProgressInfo(record) {
   if (isRecordRead(record)) return { label: '阅读完成 100%', detail: '已手动标记为已读。' };
   const manual = Number(record.progress);
   if (manual > 0) return { label: `阅读完成 ${Math.min(100, manual)}%`, detail: '这是在论文详情中手动设置的完成度。' };
-  const page = Math.max(0, Number(record.pdfAttachment?.lastPage) || 0);
-  const count = Math.max(0, Number(record.pdfAttachment?.pageCount) || 0);
+  const attachment = recordHasAvailablePdf(record) ? record.pdfAttachment : null;
+  const page = Math.max(0, Number(attachment?.lastPage) || 0);
+  const count = Math.max(0, Number(attachment?.pageCount) || 0);
   if (page && count) return { label: `PDF 位置 ${page}/${count} · ${Math.round(page / count * 100)}%`, detail: '这是当前页位置，不代表前面的页面均已读完。' };
   return { label: '尚未设置进度', detail: '可在论文详情中设置阅读完成度；打开 PDF 后也会记录当前页位置。' };
 }
 function libraryMemberships(record, names, managed) {
   const values = managed ? ['全部文献'] : ['最近看过'];
-  if (managed && (record.savedAt || record.pdfAttachment) && !names.length) values.push('待整理');
+  if (managed && (record.savedAt || recordHasAvailablePdf(record)) && !names.length) values.push('待整理');
   if (record.queueAt) values.push('阅读队列');
   if (record.savedAt) values.push('收藏');
   if (recordHasNotes(record)) values.push('笔记与标注');
@@ -554,7 +629,7 @@ function libraryMemberships(record, names, managed) {
 function libraryRow(id, record) {
   const paper = getPaper(id) || record.paper;
   const info = publicationInfo(record, paper);
-  const names = (record.collections || []).map(collectionId => library.collections[collectionId]?.name).filter(Boolean);
+  const names = collectionIdsWithAncestors(library.collections, record.collections || []).map(collectionId => library.collections[collectionId]?.name).filter(Boolean);
   const managed = Boolean(library.records[id]);
   const selected = managed && state.batch.has(id);
   const trashed = Boolean(record.trashAt);
@@ -572,11 +647,12 @@ function libraryRow(id, record) {
         ? '<button role="menuitem" data-library-action="restore">取消归档</button><button class="danger" role="menuitem" data-library-action="trash">移至回收站</button>'
         : '<button role="menuitem" data-library-action="category">加入分类</button><button role="menuitem" data-library-action="archive">归档</button><button class="danger" role="menuitem" data-library-action="trash">移至回收站</button>';
   const membershipTags = memberships.map(value => `<span class="tag">${escapeHtml(value)}</span>`).join('');
-  return `<article class="library-row ${selected ? 'selected' : ''}" data-library-id="${escapeHtml(id)}">${selectControl}<div class="library-main"><div class="library-title-wrap"><button class="library-title" data-library-action="open"><h3 data-translatable>${escapeHtml(paper.title)}</h3></button><aside class="library-membership-popover" role="tooltip"><strong>这篇文章所在的位置</strong><div class="tag-row">${membershipTags}</div><p>${escapeHtml(progress.detail)}</p></aside></div><p data-translatable>${escapeHtml(record.note || paper.abstract || '')}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span>${!managed ? '<span class="tag">仅最近浏览</span>' : ''}<span class="tag" title="${escapeHtml(progress.detail)}">${escapeHtml(progress.label)}</span>${record.pdfAttachment ? `<span class="tag published">本地 PDF · ${record.pdfAttachment.pageCount || '未知'} 页${(record.pdfAttachments?.length || 0) > 1 ? ` · ${record.pdfAttachments.length} 个版本` : ''}</span>` : ''}${record.pdfAttachment?.annotationCount ? `<span class="tag note">${record.pdfAttachment.annotationCount} 条 PDF 标注</span>` : ''}${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${archived ? '<span class="tag">已归档</span>' : ''}${trashed ? `<span class="tag note">回收站 · ${escapeHtml(dateText(record.trashAt))}</span>` : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${(record.tags || []).slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}${names.map(name => `<span class="tag collection-chip"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="library-row-actions">${record.pdfAttachment ? '<button class="small" data-library-action="pdf">阅读 PDF</button>' : ''}<button class="small" data-library-action="open">查看</button><details class="row-menu"><summary aria-label="更多文献操作">•••</summary><div role="menu"><button role="menuitem" data-library-action="compare">加入对比</button>${managed ? `<button role="menuitem" data-library-action="read">${isRecordRead(record) ? '标记未读' : '标记已读'}</button><button role="menuitem" data-library-action="queue">${record.queueAt ? '移出队列' : '加入队列'}</button>` : ''}${lifecycleActions}</div></details></div></article>`;
+  return `<article class="library-row ${selected ? 'selected' : ''}" data-library-id="${escapeHtml(id)}">${selectControl}<div class="library-main"><div class="library-title-wrap"><button class="library-title" data-library-action="open"><h3 data-translatable>${escapeHtml(paper.title)}</h3></button><aside class="library-membership-popover" role="tooltip"><strong>这篇文章所在的位置</strong><div class="tag-row">${membershipTags}</div><p>${escapeHtml(progress.detail)}</p></aside></div><p data-translatable>${escapeHtml(record.note || paper.abstract || '')}</p><div class="tag-row"><span class="tag ${paper.area === 'architecture' ? 'arch' : ''}">${paper.area === 'architecture' ? '体系结构' : 'AI'}</span>${!managed ? '<span class="tag">仅最近浏览</span>' : ''}<span class="tag" title="${escapeHtml(progress.detail)}">${escapeHtml(progress.label)}</span>${recordHasAvailablePdf(record) ? `<span class="tag published">本地 PDF · ${record.pdfAttachment.pageCount || '未知'} 页${(record.pdfAttachments?.length || 0) > 1 ? ` · ${record.pdfAttachments.length} 个版本` : ''}</span>` : ''}${recordHasAvailablePdf(record) && record.pdfAttachment?.annotationCount ? `<span class="tag note">${record.pdfAttachment.annotationCount} 条 PDF 标注</span>` : ''}${record.queueAt ? '<span class="tag">阅读队列</span>' : ''}${archived ? '<span class="tag">已归档</span>' : ''}${trashed ? `<span class="tag note">回收站 · ${escapeHtml(dateText(record.trashAt))}</span>` : ''}${record.note ? '<span class="tag note">有笔记</span>' : ''}<span class="tag ${info.status === 'published' ? 'published' : ''}">${escapeHtml(info.label)}</span>${(record.tags || []).slice(0, 3).map(tag => `<span class="tag">${escapeHtml(tag)}</span>`).join('')}${names.map(name => `<span class="tag collection-chip"># ${escapeHtml(name)}</span>`).join('')}</div></div><div class="library-row-actions">${recordHasAvailablePdf(record) ? '<button class="small" data-library-action="pdf">阅读 PDF</button>' : ''}<button class="small" data-library-action="open">查看</button><details class="row-menu"><summary aria-label="更多文献操作">•••</summary><div role="menu"><button role="menuitem" data-library-action="compare">加入对比</button>${managed ? `<button role="menuitem" data-library-action="read">${isRecordRead(record) ? '标记未读' : '标记已读'}</button><button role="menuitem" data-library-action="queue">${record.queueAt ? '移出队列' : '加入队列'}</button>` : ''}${lifecycleActions}</div></details></div></article>`;
 }
 function renderVocabularyPage(route) {
   const q = (route.query.q || '').trim().toLowerCase(); const page = Math.max(1, Number(route.query.page || 1));
   const entries = Object.entries(library.vocabulary || {}).filter(([, item]) => !q || `${item.source} ${item.translation} ${item.context || ''} ${getPaper(item.paperId)?.title || ''}`.toLowerCase().includes(q)).sort(([, a], [, b]) => new Date(b.updatedAt || b.createdAt) - new Date(a.updatedAt || a.createdAt));
+  syncLibraryViewHeader('vocabulary', route.query.q || '', entries.length);
   const total = Math.max(1, Math.ceil(entries.length / 12)); const safePage = Math.min(page, total); const pageEntries = entries.slice((safePage - 1) * 12, safePage * 12);
   el('library-list').innerHTML = pageEntries.length ? pageEntries.map(([id, item]) => {
     const paper = getPaper(item.paperId); const sourceLabel = paper?.title || item.paperTitle || '未关联论文';
@@ -596,21 +672,8 @@ function exportVocabulary() {
 }
 function renderCollectionOptions(selected) {
   library.collections = validateCollectionTree(library.collections);
-  const entries = Object.entries(library.collections);
-  const counts = new Map(entries.map(([id]) => [id, Object.values(library.records).filter(record => isActiveRecord(record) && record.collections?.includes(id)).length]));
-  const children = new Map();
-  for (const entry of entries) {
-    const parent = entry[1].parentId && library.collections[entry[1].parentId] ? entry[1].parentId : '';
-    if (!children.has(parent)) children.set(parent, []); children.get(parent).push(entry);
-  }
-  for (const values of children.values()) values.sort((a, b) => Number(a[1].order || 0) - Number(b[1].order || 0) || a[1].name.localeCompare(b[1].name, 'zh-CN'));
-  const ordered = []; const visited = new Set(); const visit = (parentId, depth) => {
-    for (const [id, collection] of children.get(parentId) || []) {
-      if (visited.has(id)) continue;
-      visited.add(id); ordered.push([id, collection, depth]); visit(id, depth + 1);
-    }
-  }; visit('', 0);
-  for (const [id, collection] of entries) if (!visited.has(id)) ordered.push([id, collection, 0]);
+  const ordered = orderedCollectionEntries();
+  const counts = new Map(ordered.map(([id]) => [id, Object.values(library.records).filter(record => isActiveRecord(record) && recordBelongsToCollection(record, library.collections, id)).length]));
   const options = ordered.map(([id, collection, depth]) => `<option value="${escapeHtml(id)}">${'　'.repeat(depth)}${depth ? '↳ ' : ''}${escapeHtml(collection.name)}（${counts.get(id) || 0}）</option>`).join('');
   if (selected !== undefined) { el('collection-filter').innerHTML = `<option value="all">全部分类</option>${options}`; el('collection-filter').value = selected || 'all'; }
   el('paper-collection').innerHTML = `<option value="">选择分类</option>${options}`;
@@ -1086,12 +1149,14 @@ async function repairPdfLibrary({ notify = true } = {}) {
     const document = candidates.find(item => item.attachmentId === record.pdfAttachment.attachmentId) || candidates[0];
     if (!document) {
       record.pdfAttachment.missing = true;
+      record.pdfAttachments = (record.pdfAttachments || [record.pdfAttachment]).map(item => ({ ...item, missing: true }));
       missing += 1;
       continue;
     }
-    if (record.pdfAttachment.missing || !record.pdfAttachment.attachmentId) {
+    if (record.pdfAttachment.missing || !record.pdfAttachment.attachmentId || document.attachmentId !== record.pdfAttachment.attachmentId) {
       const bundle = await getPdfBundle(paperId, document.attachmentId);
       record.pdfAttachment = pdfAttachmentMeta(bundle, record.pdfAttachment);
+      record.pdfAttachment.missing = false;
       record.pdfAttachments = [record.pdfAttachment, ...(record.pdfAttachments || []).filter(item => item.attachmentId !== record.pdfAttachment.attachmentId)];
       repaired += 1;
     }
@@ -1115,6 +1180,20 @@ async function repairPdfLibrary({ notify = true } = {}) {
   if (repaired || missing) saveLibrary();
   if (notify) toast(`附件检查完成：修复 ${repaired} 项，缺失 ${missing} 项`);
   return { repaired, missing };
+}
+async function refreshLibraryFromStorage() {
+  const button = el('library-refresh');
+  button.disabled = true; button.textContent = '刷新中…';
+  try {
+    const { repaired, missing } = await repairPdfLibrary({ notify: false });
+    renderRoute();
+    toast(missing ? `文献库已刷新：${repaired} 项已修复，${missing} 个 PDF 已失效并隐藏阅读入口` : `文献库已刷新：附件状态正常${repaired ? `，修复 ${repaired} 项` : ''}`);
+  } catch (error) {
+    console.warn('library refresh failed', error);
+    toast('文献库刷新失败，请稍后重试');
+  } finally {
+    button.disabled = false; button.textContent = '↻ 刷新文献库';
+  }
 }
 async function parseAndStorePdf(file, paperId, { attachmentId = null, preserveAnnotations = true, jobId = null, fingerprint = null } = {}) {
   if (!file || (!/\.pdf$/i.test(file.name) && file.type !== 'application/pdf')) throw new Error('请选择 PDF 文件');
@@ -4243,6 +4322,11 @@ el('refresh-data').addEventListener('click', () => loadData(true));
 
 el('library-tabs').addEventListener('click', event => { const button = event.target.closest('[data-tab]'); if (button) navigate(`library/${button.dataset.tab}`); });
 el('library-tab-select').addEventListener('change', event => navigate(`library/${event.target.value}`));
+el('library-view-search').addEventListener('input', event => {
+  const route = parseRoute(); if (route.name !== 'library') return;
+  clearTimeout(state.searchTimer);
+  state.searchTimer = setTimeout(() => setQuery({ q: event.target.value.trim(), page: 1 }, true), 220);
+});
 el('library-progress-help').addEventListener('click', () => toast('完成度由论文详情中的进度选项手动设置；未设置时仅显示 PDF 当前页位置。'));
 el('library-list').addEventListener('click', event => {
   const vocabularyRow = event.target.closest('[data-vocabulary-id]');
@@ -4340,6 +4424,7 @@ el('library-pdf-search-button').addEventListener('click', searchLocalPdfLibrary)
 el('library-pdf-search').addEventListener('keydown', event => { if (event.key === 'Enter') searchLocalPdfLibrary(); });
 el('export-vocabulary').addEventListener('click', exportVocabulary); el('export-library').addEventListener('click', exportLibrary); el('export-full-backup').addEventListener('click', exportCompleteBackup); el('repair-pdf-library').addEventListener('click', () => repairPdfLibrary()); el('import-library').addEventListener('click', () => el('import-file').click()); el('import-file').addEventListener('change', event => { const [file] = event.target.files; if (file) importLibraryFile(file); event.target.value = ''; });
 el('import-local-pdf').addEventListener('click', openPdfImportCenter);
+el('library-refresh').addEventListener('click', refreshLibraryFromStorage);
 el('settings-import-pdf').addEventListener('click', openPdfImportCenter);
 el('library-new-collection').addEventListener('click', () => { navigate('library/collections'); setTimeout(() => el('new-collection-name').focus(), 80); });
 el('empty-trash').addEventListener('click', () => permanentlyDeleteRecords(Object.entries(library.records).filter(([, record]) => record.trashAt).map(([id]) => id)));

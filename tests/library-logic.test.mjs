@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyBatchAction,
+  collectionIdsWithAncestors,
   derivePdfMetadata,
   findPdfPaperMatch,
   isActiveRecord,
@@ -13,6 +14,7 @@ import {
   parsePdfAuthors,
   pdfFileFingerprint,
   recordHasNotes,
+  recordBelongsToCollection,
   setRecordRead,
   validateCollectionTree
 } from '../library-logic.js';
@@ -124,6 +126,20 @@ test('collection validation removes missing parents and breaks cycles', () => {
   for (const id of Object.keys(collections)) parentChain(id);
   assert.equal(collections.c.parentId, null);
   assert.equal(collections.self.parentId, null);
+});
+
+test('parent collections automatically include papers assigned to descendants', () => {
+  const collections = {
+    research: { name: 'Research' },
+    agents: { name: 'Agents', parentId: 'research' },
+    secure: { name: 'Secure agents', parentId: 'agents' }
+  };
+  const record = { collections: ['secure'] };
+  assert.deepEqual(collectionIdsWithAncestors(collections, record.collections), ['secure', 'agents', 'research']);
+  assert.equal(recordBelongsToCollection(record, collections, 'secure'), true);
+  assert.equal(recordBelongsToCollection(record, collections, 'agents'), true);
+  assert.equal(recordBelongsToCollection(record, collections, 'research'), true);
+  assert.equal(recordBelongsToCollection(record, collections, 'missing'), false);
 });
 
 test('v3 migration preserves user data and adds v4 lifecycle defaults', () => {

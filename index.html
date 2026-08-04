@@ -447,6 +447,36 @@
     .news-card:hover .news-extra,.news-card:focus-visible .news-extra,.news-card:focus-within .news-extra{grid-template-rows:1fr;opacity:1;visibility:visible;pointer-events:auto}
     .news-card-footer{margin-top:12px}
 
+    /* v6.13 stable library workspace and hierarchical collections */
+    #view-library>.library-page-head{min-height:118px;align-items:flex-end}
+    #view-library>.library-page-head>div:first-child{min-width:0}
+    #view-library>.library-page-head .page-actions{min-width:350px;justify-content:flex-end}
+    .library-card{width:100%;min-width:0}
+    .library-card .profile-panel{min-height:102px}
+    #library-tabs{min-height:56px;align-content:center}
+    .library-progress-help{min-height:39px}
+    .library-view-head{display:grid;grid-template-columns:minmax(0,1fr) minmax(300px,390px);align-items:center;gap:20px;min-height:96px;padding:16px 18px;border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--card) 88%,var(--soft))}
+    .library-view-copy{min-width:0}.library-view-kicker{display:block;margin-bottom:3px;color:var(--green);font:800 8.5px/1.2 ui-monospace,SFMono-Regular,monospace;letter-spacing:.1em}
+    .library-view-copy h2{margin:0;font-size:17px;letter-spacing:-.25px}.library-view-copy p{min-height:17px;margin:4px 0 0;color:var(--muted);font-size:10.5px;line-height:1.55}
+    .library-view-controls{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:9px;min-width:0}
+    .library-view-search{display:flex;align-items:center;gap:7px;min-width:0;height:38px;padding:0 11px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--muted)}
+    .library-view-search:focus-within{border-color:var(--green);box-shadow:0 0 0 3px color-mix(in srgb,var(--green) 12%,transparent)}
+    .library-view-search input{width:100%;min-width:0;border:0;outline:0;background:transparent;color:var(--ink);font-size:11px}
+    .library-view-count{min-width:68px;text-align:right;white-space:nowrap;color:var(--muted);font:700 9.5px ui-monospace,SFMono-Regular,monospace}
+    .collection-manager{border-bottom:1px solid var(--line);background:color-mix(in srgb,var(--soft) 58%,var(--card))}
+    .collection-manager-intro{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:14px 16px 0}.collection-manager-intro h3{margin:0;font-size:13px}.collection-manager-intro p{margin:3px 0 0;color:var(--muted);font-size:9.5px}
+    .collection-tools{border:0!important;background:transparent!important}.collection-tools label{min-width:126px}.collection-tools label.grow{flex:1}.collection-tools label>input:not([type="color"]),.collection-tools label>select{width:100%}
+    .collection-tree{display:grid;gap:14px;padding:18px;background:color-mix(in srgb,var(--soft) 35%,var(--card))}
+    .collection-node{--collection-color:var(--green);overflow:hidden;border:1px solid var(--line);border-left:4px solid var(--collection-color);border-radius:13px;background:var(--card);box-shadow:0 7px 22px color-mix(in srgb,var(--ink) 5%,transparent)}
+    .collection-node[data-depth="1"]{margin-left:22px}.collection-node[data-depth="2"]{margin-left:44px}.collection-node[data-depth="3"]{margin-left:66px}
+    .collection-node-head{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;padding:14px 15px;border-bottom:1px solid color-mix(in srgb,var(--line) 75%,transparent)}
+    .collection-node-title{display:flex;align-items:flex-start;gap:10px;min-width:0}.collection-node-icon{display:grid;place-items:center;flex:0 0 auto;width:30px;height:30px;border-radius:9px;background:color-mix(in srgb,var(--collection-color) 13%,var(--card));color:var(--collection-color);font-size:15px}
+    .collection-node-title h3{margin:0;font-size:13px}.collection-node-title p{margin:3px 0 0;color:var(--muted);font-size:9.5px}.collection-node-meta{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+    .collection-node-meta span{padding:3px 7px;border-radius:999px;background:var(--soft);color:var(--muted);font-size:9px;white-space:nowrap}
+    .collection-paper-list{display:grid;gap:0}.collection-paper-card{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:12px;padding:11px 15px;border-bottom:1px solid color-mix(in srgb,var(--line) 65%,transparent)}.collection-paper-card:last-child{border-bottom:0}
+    .collection-paper-card:hover{background:color-mix(in srgb,var(--pale) 28%,var(--card))}.collection-paper-title{border:0;background:transparent;padding:0;text-align:left;color:var(--ink);font-size:11px;font-weight:720;line-height:1.45;cursor:pointer}.collection-paper-title:hover{color:var(--green)}
+    .collection-paper-meta{margin-top:3px;color:var(--muted);font-size:9px}.collection-paper-actions{display:flex;gap:6px;align-items:center}.collection-empty{padding:14px 15px;color:var(--muted);font-size:10px}
+
     @media(min-width:721px){
       html[data-sidebar="collapsed"] .nav-group-label{display:none}
       html[data-sidebar="collapsed"] .nav-group+.nav-group{margin-top:5px;padding-top:10px}
@@ -474,6 +504,10 @@
       .news-extra{grid-template-rows:1fr;opacity:1;visibility:visible;pointer-events:auto}.news-extra-content{grid-template-columns:1fr}.news-extra img{max-height:260px}
       .export-config-grid{grid-template-columns:1fr}
       .detail-open-row{align-items:flex-start}.detail-open-row .panel-note{max-width:48%;text-align:left}
+      #view-library>.library-page-head{min-height:0}.library-card .profile-panel{min-height:0}#view-library>.library-page-head .page-actions{min-width:0}
+      .library-view-head{grid-template-columns:1fr;gap:11px;min-height:0}.library-view-controls{grid-template-columns:minmax(0,1fr) auto}
+      .collection-manager-intro{display:block}.collection-tools{display:grid;grid-template-columns:1fr 1fr}.collection-tools label,.collection-tools label.grow{min-width:0}.collection-tools .small{width:100%}
+      .collection-node[data-depth]{margin-left:0}.collection-node-head{display:grid}.collection-node-meta{justify-content:flex-start}.collection-paper-card{grid-template-columns:1fr}.collection-paper-actions{justify-content:flex-start}
     }
   </style>
 </head>
@@ -562,12 +596,16 @@
     </section>
 
     <section class="view" id="view-library">
-      <div class="page-head"><div><div class="eyebrow">PERSONAL RESEARCH LIBRARY</div><h1>我的文献库</h1><p class="subtitle">分类、队列、笔记和本地 PDF 都保存在当前浏览器；维护工具已集中到设置。</p></div><div class="page-actions"><button class="primary" id="import-local-pdf">＋ 导入 PDF</button><button class="ghost" id="library-new-collection">新建分类</button></div></div>
+      <div class="page-head library-page-head"><div><div class="eyebrow">PERSONAL RESEARCH LIBRARY</div><h1>我的文献库</h1><p class="subtitle">分类、队列、笔记和本地 PDF 都保存在当前浏览器；维护工具已集中到设置。</p></div><div class="page-actions"><button class="ghost" id="library-refresh" title="重新核验本地 PDF 附件">↻ 刷新文献库</button><button class="primary" id="import-local-pdf">＋ 导入 PDF</button><button class="ghost" id="library-new-collection">新建分类</button></div></div>
       <section class="card library-card">
         <div class="profile-panel"><div class="profile-info"><span class="avatar" id="profile-avatar">研</span><div><h2 id="profile-name-display">研究者</h2><p id="profile-focus-display">AI · 计算机体系结构</p></div><button class="small" id="edit-profile">编辑</button></div><div class="library-stats"><div class="library-stat"><span>收藏</span><b id="stat-saved">0</b></div><div class="library-stat"><span>队列</span><b id="stat-queue">0</b></div><div class="library-stat"><span>已读</span><b id="stat-read">0</b></div><div class="library-stat"><span>笔记</span><b id="stat-notes">0</b></div><div class="library-stat"><span>已发表</span><b id="stat-published">0</b></div><div class="library-stat"><span>生词</span><b id="stat-terms">0</b></div></div></div>
         <label class="library-mobile-filter">文献视图<select id="library-tab-select"><optgroup label="核心文献"><option value="all">全部文献</option><option value="unfiled">待整理</option><option value="queue">阅读队列</option><option value="saved">收藏</option></optgroup><optgroup label="整理"><option value="collections">分类</option><option value="notes">笔记与标注</option><option value="recent">最近看过</option><option value="duplicates">重复项</option></optgroup><optgroup label="维护"><option value="archive">归档</option><option value="trash">回收站</option></optgroup><optgroup label="学习工具"><option value="vocabulary">生词本</option></optgroup></select></label>
         <div class="tabs" id="library-tabs"><div class="library-nav-group"><span class="library-nav-label">核心</span><button data-tab="all">全部文献</button><button data-tab="unfiled">待整理</button><button data-tab="queue">阅读队列</button><button data-tab="saved">收藏</button></div><div class="library-nav-group"><span class="library-nav-label">整理</span><button data-tab="collections">分类</button><button data-tab="notes">笔记与标注</button><button data-tab="recent">最近看过</button><button data-tab="duplicates">重复项</button></div><div class="library-nav-group"><span class="library-nav-label">维护</span><button data-tab="archive">归档</button><button data-tab="trash">回收站</button></div><div class="library-nav-group learning"><span class="library-nav-label">学习</span><button data-tab="vocabulary">生词本</button></div></div>
         <div class="library-progress-help"><button type="button" id="library-progress-help" aria-label="阅读进度说明">?</button><span><strong>进度定义：</strong>手动状态表示阅读完成度；尚未设置时，显示 PDF 当前页位置，不等同于已读完此前所有页面。</span></div>
+        <div class="library-view-head">
+          <div class="library-view-copy"><span class="library-view-kicker" id="library-view-kicker">LIBRARY VIEW</span><h2 id="library-view-title">全部文献</h2><p id="library-view-description">统一查看当前文献库中的有效记录。</p></div>
+          <div class="library-view-controls"><label class="library-view-search">⌕ <input id="library-view-search" type="search" placeholder="搜索标题、作者、标签或 DOI" autocomplete="off"></label><span class="library-view-count" id="library-view-count">0 篇</span></div>
+        </div>
         <div class="batchbar hidden" id="library-batchbar">
           <div class="batch-selection"><label><input type="checkbox" id="library-select-all"> 全选本页</label><span class="mono" id="batch-count">0 项已选</span><button class="small" id="batch-clear">取消选择</button></div>
           <div class="batch-actions">
@@ -577,7 +615,7 @@
             <div class="batch-category" data-batch-mode="standard"><select id="batch-collection-select" aria-label="批量分类"><option value="">选择分类…</option></select><button class="small" id="batch-collection-add">加入</button><button class="small" id="batch-collection-remove">移出</button></div>
           </div>
         </div>
-        <div class="filterbar collection-tools hidden" id="collection-tools"><select id="collection-filter"><option value="all">全部分类</option></select><label>父分类<select id="collection-parent"><option value="">顶层分类</option></select></label><input class="grow" id="new-collection-name" placeholder="分类名称"><input class="grow" id="collection-description" placeholder="分类说明（可选）"><label>颜色<input id="collection-color" type="color" value="#116347"></label><button class="small" id="create-collection">创建分类</button><button class="small" id="rename-collection">重命名</button><button class="small danger" id="delete-collection">删除分类</button></div>
+        <section class="collection-manager hidden" id="collection-tools"><div class="collection-manager-intro"><div><h3>分类管理</h3><p>父分类自动汇总所有子分类中的文章；文章只需加入最具体的分类。</p></div></div><div class="filterbar collection-tools"><label>查看分类<select id="collection-filter"><option value="all">全部分类</option></select></label><label>父分类<select id="collection-parent"><option value="">顶层分类</option></select></label><label class="grow">分类名称<input id="new-collection-name" placeholder="例如：安全智能体"></label><label class="grow">分类说明<input id="collection-description" placeholder="可选，用一句话说明范围"></label><label>颜色<input id="collection-color" type="color" value="#116347"></label><button class="small" id="create-collection">创建分类</button><button class="small" id="rename-collection">重命名</button><button class="small danger" id="delete-collection">删除分类</button></div></section>
         <div class="filterbar hidden" id="smart-tools"><select id="smart-filter"><option value="unread">未读文献</option><option value="has-pdf">有 PDF 附件</option><option value="annotated">有 PDF 标注</option><option value="recent-add">最近 7 天加入</option><option value="needs-metadata">元数据待补充</option><option value="pdf-search">PDF 全文结果</option></select><input class="grow" id="library-pdf-search" placeholder="检索已解析的 PDF 全文"><button class="small" id="library-pdf-search-button">全文检索</button></div>
         <div id="library-list"></div>
       </section>
@@ -606,7 +644,7 @@
         <section class="card settings-card"><h2>PDF 导入中心</h2><p>批量拖放 PDF、扫描文件夹、检查重复项和恢复失败任务。</p><div class="settings-status"><div><span>导入队列</span><strong id="settings-import-summary">0 个任务</strong></div></div><div class="settings-actions"><button class="primary" id="settings-import-pdf">打开导入中心</button><button class="ghost" id="import-pdf-directory">扫描文件夹</button></div></section>
         <section class="card settings-card"><h2>备份与迁移</h2><p>完整备份包含文献索引、PDF 和标注；JSON 用于轻量迁移，不含 PDF 二进制。</p><div class="settings-actions"><button class="primary" id="export-full-backup">完整备份</button><button class="ghost" id="export-library">导出 JSON</button><button class="ghost" id="import-library">导入 JSON</button><button class="ghost" id="export-vocabulary">导出生词</button></div></section>
         <section class="card settings-card"><h2>存储与维护</h2><p>核对 IndexedDB 附件、修复断链，或清理回收站中的文献和 PDF。</p><div class="settings-status"><div><span>本地存储</span><strong id="settings-storage-summary">正在估算</strong></div><div><span>回收站</span><strong id="settings-trash-summary">0 篇</strong></div></div><div class="settings-actions"><button class="ghost" id="repair-pdf-library">附件检查</button><button class="ghost danger" id="empty-trash">清空回收站</button></div></section>
-        <section class="card settings-card" id="settings-help"><h2>个人资料、快捷键与版本</h2><p>PaperScope v6.12.2 · 数据默认只保存在当前浏览器。</p><div class="settings-status"><div><span>快速跳转</span><strong>Ctrl/⌘ + K</strong></div><div><span>关闭菜单或弹窗</span><strong>Esc</strong></div><div><span>PDF 标注 / 框选截图</span><strong>H / U / N / R / S</strong></div></div><div class="settings-actions"><button class="primary" id="settings-profile">编辑个人资料</button></div></section>
+        <section class="card settings-card" id="settings-help"><h2>个人资料、快捷键与版本</h2><p>PaperScope v6.13.0 · 数据默认只保存在当前浏览器。</p><div class="settings-status"><div><span>快速跳转</span><strong>Ctrl/⌘ + K</strong></div><div><span>关闭菜单或弹窗</span><strong>Esc</strong></div><div><span>PDF 标注 / 框选截图</span><strong>H / U / N / R / S</strong></div></div><div class="settings-actions"><button class="primary" id="settings-profile">编辑个人资料</button></div></section>
       </div>
       <input class="hidden" type="file" id="import-file" accept="application/json"><input class="hidden" type="file" id="local-pdf-file" accept="application/pdf,.pdf" multiple><input class="hidden" type="file" id="local-pdf-directory" accept="application/pdf,.pdf" multiple webkitdirectory>
     </section>
@@ -710,6 +748,6 @@
 <div class="pdf-snapshot-layer" id="pdf-snapshot-layer" aria-live="polite" aria-label="PDF 截图对照区"></div>
 <aside class="update-banner" id="update-banner" role="status" aria-live="polite"><div><strong>PaperScope 新版本已准备好</strong><span>刷新即可切换到完整新版，不会清除收藏、笔记或生词本。</span></div><div class="update-actions"><button class="primary" id="update-now">立即刷新</button><button class="ghost" id="update-later">稍后</button></div></aside>
 <button class="backtop" id="backtop" title="返回顶部">↑</button><div class="toast" id="toast"></div>
-<script type="module" src="./app.js?v=6.12.2"></script>
+<script type="module" src="./app.js?v=6.13.0"></script>
 </body>
 </html>
